@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Administrador de origen (vos). Además, cualquier usuario con rol "admin" en /usuarios.
+    function email() { return request.auth.token.email.lower(); }
+    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function perfil() { return get(/databases/$(database)/documents/usuarios/$(email())).data; }
+    function tienePerfil() { return exists(/databases/$(database)/documents/usuarios/$(email())); }
+    function isAdmin() {
+      return signedIn() && (email() == 'cocojleguizamon@gmail.com'
+        || (tienePerfil() && perfil().rol == 'admin' && perfil().activo == true));
+    }
+    function activo() { return signedIn() && tienePerfil() && perfil().activo == true; }
+
+    // Usuarios: cada uno lee su propio perfil; el admin lee y escribe todos.
+    match /usuarios/{uid} {
+      allow read: if isAdmin() || (signedIn() && email() == uid);
+      allow write: if isAdmin();
+    }
+
+    // Sedes y materias: las leen los usuarios habilitados; solo el admin las modifica.
+    match /sedes/{id} {
+      allow read: if isAdmin() || activo();
+      allow write: if isAdmin();
+    }
+    match /materias/{id} {
+      allow read: if isAdmin() || activo();
+      allow write: if isAdmin();
+    }
+
+    // Todo lo demás, cerrado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

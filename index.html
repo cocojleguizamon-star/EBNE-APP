@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EBNE Coordinación</title>
+<link rel="icon" href="logo.png">
+<style>
+  :root{
+    --rojo:#c8202f; --azul:#1f6fb2; --azul-osc:#0f4c81; --bg:#f4f6f9; --card:#fff;
+    --txt:#1b2733; --sub:#5b6b7b; --borde:#dbe2ea; --ok:#1e8e4e; --warn:#c77700;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#10161d; --card:#18212b; --txt:#e8eef4; --sub:#9bacbc; --borde:#2a3643; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);}
+  header{background:var(--azul-osc);color:#fff;display:flex;align-items:center;gap:12px;padding:10px 16px;position:sticky;top:0;z-index:5}
+  header img{height:40px;background:#fff;border-radius:8px;padding:2px}
+  header h1{font-size:1.05rem;margin:0;flex:1}
+  header .who{font-size:.8rem;opacity:.9;text-align:right}
+  header button{background:transparent;border:1px solid #ffffff88;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer}
+  main{max-width:980px;margin:0 auto;padding:16px}
+  .login{max-width:380px;margin:12vh auto;text-align:center;background:var(--card);border:1px solid var(--borde);border-radius:16px;padding:28px 22px}
+  .login img{width:170px}
+  .login h2{margin:.4rem 0 .2rem}
+  .login p{color:var(--sub);margin:.2rem 0 1.2rem}
+  button.primary{background:var(--rojo);color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:600;cursor:pointer;font-size:.95rem}
+  button.ghost{background:transparent;color:var(--azul);border:1px solid var(--borde);border-radius:10px;padding:8px 12px;cursor:pointer}
+  button.danger{color:var(--rojo)}
+  button:disabled{opacity:.5;cursor:default}
+  nav.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  nav.tabs button{background:var(--card);border:1px solid var(--borde);border-radius:999px;padding:8px 14px;cursor:pointer;color:var(--txt)}
+  nav.tabs button.on{background:var(--azul);border-color:var(--azul);color:#fff}
+  .card{background:var(--card);border:1px solid var(--borde);border-radius:14px;padding:14px;margin-bottom:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .row.sp{justify-content:space-between}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--borde);vertical-align:top}
+  th{color:var(--sub);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.03em}
+  .tag{display:inline-block;border-radius:999px;padding:2px 9px;font-size:.75rem;background:#1f6fb21f;color:var(--azul);margin:1px 2px 1px 0}
+  .tag.off{background:#8881;color:var(--sub)}
+  .tag.ok{background:#1e8e4e22;color:var(--ok)}
+  .tag.pend{background:#c7770022;color:var(--warn)}
+  input,select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--borde);border-radius:10px;padding:9px 10px;min-width:0}
+  label{display:block;font-size:.8rem;color:var(--sub);margin:10px 0 4px}
+  .modal-bg{position:fixed;inset:0;background:#0008;display:flex;align-items:flex-start;justify-content:center;padding:4vh 12px;overflow:auto;z-index:10}
+  .modal{background:var(--card);border-radius:16px;padding:18px;width:100%;max-width:520px;border:1px solid var(--borde)}
+  .modal h3{margin:0 0 4px}
+  .asig{display:flex;gap:6px;margin-bottom:6px}
+  .asig select{flex:1}
+  .msg{padding:10px 12px;border-radius:10px;background:#c7770018;color:var(--txt);margin-bottom:12px;font-size:.9rem}
+  .empty{color:var(--sub);text-align:center;padding:22px}
+  .muted{color:var(--sub);font-size:.85rem}
+  @media (max-width:640px){ th:nth-child(3),td:nth-child(3){display:none} }
+</style>
+</head>
+<body>
+<header>
+  <img src="logo.png" alt="EPSA">
+  <h1>EBNE Coordinación</h1>
+  <div class="who" id="who"></div>
+  <button id="btnSalir" hidden>Salir</button>
+</header>
+<main id="app"><div class="empty">Cargando…</div></main>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, writeBatch, query, orderBy }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const ADMIN_ORIGEN = "cocojleguizamon@gmail.com";
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// ---- Datos iniciales ----
+const SEDES_INICIALES = ["Córdoba", "Ballester", "CABA"];
+const MATERIAS_INICIALES = [
+  ["Natación", "Prácticas y condición física"],
+  ["Preparación Física", "Prácticas y condición física"],
+  ["Técnicas y Estrategias de Salvamento", "Prácticas y condición física"],
+  ["Anatomía y Fisiología del Cuerpo Humano", "Ciencias aplicadas a la salud"],
+  ["Educación Sanitaria", "Ciencias aplicadas a la salud"],
+  ["Primeros Auxilios y Técnicas Sanitarias Específicas", "Ciencias aplicadas a la salud"],
+  ["Reanimación Cardiopulmonar (RCP)", "Ciencias aplicadas a la salud"],
+  ["Aspectos Psicosociales, Éticos y Legales de la Profesión", "Fundamento teórico profesional"],
+  ["Problemática del Ahogamiento", "Fundamento teórico profesional"],
+  ["Entornos Acuáticos", "Fundamento teórico profesional"],
+];
+const slug = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const $ = (s, r=document) => r.querySelector(s);
+
+// ---- Estado ----
+let me = null;            // perfil del usuario actual
+let sedes = [], materias = [], usuarios = [];
+let tab = "docentes";
+let filtro = { sede: "", materia: "", q: "" };
+
+const app$ = $("#app");
+$("#btnSalir").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, async (u) => {
+  if (!u) return pantallaLogin();
+  try { await cargarSesion(u); }
+  catch (e) { console.error(e); pantallaError(e); }
+});
+
+function pantallaLogin(msg) {
+  $("#who").textContent = ""; $("#btnSalir").hidden = true;
+  app$.innerHTML = `
+    <div class="login">
+      <img src="logo.png" alt="EPSA">
+      <h2>EBNE Coordinación</h2>
+      <p>Ingresá con la cuenta de Google que registró la coordinación.</p>
+      ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
+      <button class="primary" id="go">Ingresar con Google</button>
+    </div>`;
+  $("#go").onclick = async () => {
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+    catch (e) { pantallaLogin("No se pudo iniciar sesión: " + (e.code || e.message)); }
+  };
+}
+function pantallaError(e) {
+  app$.innerHTML = `<div class="card"><div class="msg">Ocurrió un error: ${esc(e.code || e.message)}</div>
+  <button class="ghost" onclick="location.reload()">Reintentar</button></div>`;
+}
+
+async function cargarSesion(u) {
+  const email = u.email.toLowerCase();
+  const esOrigen = email === ADMIN_ORIGEN;
+  const snap = await getDoc(doc(db, "usuarios", email));
+  me = snap.exists() ? { id: email, ...snap.data() } : null;
+  if (!me && esOrigen) me = { id: email, email, nombre: u.displayName || "Administrador", rol: "admin", activo: true, asignaciones: [] };
+  if (!me || me.activo === false) {
+    await signOut(auth);
+    return pantallaLogin("Tu mail (" + email + ") no está habilitado. Pedile el alta a la coordinación.");
+  }
+  $("#who").innerHTML = `${esc(me.nombre || email)}<br>${esc(me.rol)}`;
+  $("#btnSalir").hidden = false;
+  await cargarDatos();
+  me.rol === "admin" ? vistaAdmin() : vistaDocente();
+}
+
+async function cargarDatos() {
+  const [s, m] = await Promise.all([
+    getDocs(query(collection(db, "sedes"), orderBy("orden"))),
+    getDocs(query(collection(db, "materias"), orderBy("orden"))),
+  ]);
+  sedes = s.docs.map(d => ({ id: d.id, ...d.data() }));
+  materias = m.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (me.rol === "admin") {
+    const us = await getDocs(collection(db, "usuarios"));
+    usuarios = us.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre||"").localeCompare(b.nombre||""));
+  }
+}
+const nSede = id => sedes.find(s => s.id === id)?.nombre ?? id;
+const nMat = id => materias.find(m => m.id === id)?.nombre ?? id;
+
+// ---- Vista docente (por ahora: sus materias) ----
+function vistaDocente() {
+  const asig = me.asignaciones || [];
+  app$.innerHTML = `
+    <h2>Hola, ${esc((me.nombre||"").split(" ")[0] || "docente")}</h2>
+    <div class="card">
+      <strong>Tus materias</strong>
+      ${asig.length ? `<table><tr><th>Materia</th><th>Sede</th><th>Programa</th></tr>
+        ${asig.map(a => `<tr><td>${esc(nMat(a.materiaId))}</td><td>${esc(nSede(a.sedeId))}</td>
+        <td><span class="tag pend">Pendiente</span></td></tr>`).join("")}</table>
+        <p class="muted">Próximamente: cargá acá el programa de cada materia antes del inicio.</p>`
+      : `<div class="empty">Todavía no tenés materias asignadas.</div>`}
+    </div>`;
+}
+
+// ---- Vista admin ----
+function vistaAdmin() {
+  const vacio = !sedes.length || !materias.length;
+  app$.innerHTML = `
+    ${vacio ? `<div class="msg row sp"><span>Todavía no hay sedes o materias cargadas.</span>
+      <button class="primary" id="seed">Cargar sedes y materias iniciales</button></div>` : ""}
+    <nav class="tabs">
+      ${[["docentes","Docentes"],["sedes","Sedes"],["materias","Materias"]]
+        .map(([k,t]) => `<button data-t="${k}" class="${tab===k?"on":""}">${t}</button>`).join("")}
+    </nav>
+    <section id="panel"></section>`;
+  if (vacio) $("#seed").onclick = cargarIniciales;
+  app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vistaAdmin(); });
+  ({ docentes: panelDocentes, sedes: panelSedes, materias: panelMaterias })[tab]();
+}
+
+async function cargarIniciales() {
+  const b = writeBatch(db);
+  if (!sedes.length) SEDES_INICIALES.forEach((n,i) => b.set(doc(db,"sedes",slug(n)), { nombre:n, activa:true, orden:i }));
+  if (!materias.length) MATERIAS_INICIALES.forEach(([n,a],i) => b.set(doc(db,"materias",slug(n)), { nombre:n, area:a, activa:true, orden:i }));
+  await b.commit(); await cargarDatos(); vistaAdmin();
+}
+
+// Docentes
+function panelDocentes() {
+  const f = filtro;
+  const lista = usuarios.filter(u =>
+    (!f.sede || (u.asignaciones||[]).some(a => a.sedeId === f.sede)) &&
+    (!f.materia || (u.asignaciones||[]).some(a => a.materiaId === f.materia)) &&
+    (!f.q || (u.nombre + " " + u.email).toLowerCase().includes(f.q.toLowerCase())));
+  $("#panel").innerHTML = `
+    <div class="card">
+      <div class="row sp">
+        <div class="row">
+          <input id="q" placeholder="Buscar nombre o mail" value="${esc(f.q)}">
+          <select id="fs"><option value="">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${f.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+          <select id="fm"><option value="">Todas las materias</option>${materias.map(m=>`<option value="${m.id}" ${f.materia===m.id?"selected":""}>${esc(m.nombre)}</option>`).join("")}</select>
+        </div>
+        <button class="primary" id="nuevo">+ Agregar</button>
+      </div>
+    </div>
+    <div class="card">
+      ${lista.length ? `<table><tr><th>Persona</th><th>Rol</th><th>Materias y sedes</th><th></th></tr>
+      ${lista.map(u => `<tr>
+        <td><strong>${esc(u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(u.email)}</span></td>
+        <td><span class="tag ${u.activo===false?"off":""}">${esc(u.rol)}${u.activo===false?" · inactivo":""}</span></td>
+        <td>${(u.asignaciones||[]).map(a=>`<span class="tag">${esc(nMat(a.materiaId))} · ${esc(nSede(a.sedeId))}</span>`).join("") || `<span class="muted">Sin materias</span>`}</td>
+        <td><button class="ghost" data-e="${esc(u.id)}">Editar</button></td></tr>`).join("")}</table>`
+      : `<div class="empty">No hay personas para mostrar. Agregá la primera con “+ Agregar”.</div>`}
+    </div>`;
+  $("#q").oninput = e => { filtro.q = e.target.value; panelDocentes(); $("#q").focus(); $("#q").setSelectionRange(filtro.q.length, filtro.q.length); };
+  $("#fs").onchange = e => { filtro.sede = e.target.value; panelDocentes(); };
+  $("#fm").onchange = e => { filtro.materia = e.target.value; panelDocentes(); };
+  $("#nuevo").onclick = () => modalUsuario(null);
+  $("#panel").querySelectorAll("[data-e]").forEach(b => b.onclick = () => modalUsuario(usuarios.find(u => u.id === b.dataset.e)));
+}
+
+function filaAsig(a = {}) {
+  return `<div class="asig">
+    <select class="as">${sedes.map(s=>`<option value="${s.id}" ${a.sedeId===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+    <select class="am">${materias.map(m=>`<option value="${m.id}" ${a.materiaId===m.id?"selected":""}>${esc(m.nombre)}</option>`).join("")}</select>
+    <button class="ghost danger" type="button" data-x>✕</button></div>`;
+}
+function modalUsuario(u) {
+  const nuevo = !u;
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal">
+    <h3>${nuevo ? "Agregar persona" : "Editar persona"}</h3>
+    <label>Nombre y apellido</label><input id="n" style="width:100%" value="${esc(u?.nombre||"")}">
+    <label>Mail de Google</label><input id="e" type="email" style="width:100%" value="${esc(u?.email||"")}" ${nuevo?"":"disabled"}>
+    <div class="row"><div style="flex:1"><label>Rol</label>
+      <select id="r" style="width:100%">${["docente","coordinador","admin"].map(r=>`<option ${u?.rol===r?"selected":""}>${r}</option>`).join("")}</select></div>
+    <div style="flex:1"><label>Estado</label>
+      <select id="a" style="width:100%"><option value="1">Activo</option><option value="0" ${u?.activo===false?"selected":""}>Inactivo</option></select></div></div>
+    <label>Materias y sedes asignadas</label>
+    <div id="asigs">${(u?.asignaciones||[]).map(filaAsig).join("")}</div>
+    <button class="ghost" type="button" id="mas">+ Agregar materia</button>
+    <div id="err" class="msg" hidden></div>
+    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>
+  </div>`;
+  document.body.appendChild(bg);
+  const bindX = () => bg.querySelectorAll("[data-x]").forEach(b => b.onclick = () => b.parentElement.remove());
+  bindX();
+  $("#mas", bg).onclick = () => { $("#asigs", bg).insertAdjacentHTML("beforeend", filaAsig()); bindX(); };
+  $("#cancel", bg).onclick = () => bg.remove();
+  $("#ok", bg).onclick = async () => {
+    const email = $("#e", bg).value.trim().toLowerCase(), nombre = $("#n", bg).value.trim();
+    const err = $("#err", bg);
+    if (!nombre || !/^\S+@\S+\.\S+$/.test(email)) { err.hidden = false; err.textContent = "Completá nombre y un mail válido."; return; }
+    const asignaciones = [...bg.querySelectorAll(".asig")].map(r => ({ sedeId: $(".as", r).value, materiaId: $(".am", r).value }))
+      .filter((a,i,arr) => arr.findIndex(b => b.sedeId===a.sedeId && b.materiaId===a.materiaId) === i);
+    const data = { email, nombre, rol: $("#r", bg).value, activo: $("#a", bg).value === "1", asignaciones };
+    $("#ok", bg).disabled = true;
+    try { await setDoc(doc(db, "usuarios", email), data, { merge: true }); bg.remove(); await cargarDatos(); vistaAdmin(); }
+    catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
+  };
+}
+
+// Sedes
+function panelSedes() {
+  $("#panel").innerHTML = `
+    <div class="card"><div class="row sp"><strong>Sedes</strong><button class="primary" id="nueva">+ Nueva sede</button></div>
+    <p class="muted">Sumar una sede nueva no cambia nada más: las materias son las mismas en todas.</p>
+    <table><tr><th>Sede</th><th>Estado</th><th></th></tr>
+    ${sedes.map(s=>`<tr><td><strong>${esc(s.nombre)}</strong></td><td><span class="tag ${s.activa===false?"off":"ok"}">${s.activa===false?"Inactiva":"Activa"}</span></td>
+      <td><button class="ghost" data-t="${s.id}">${s.activa===false?"Activar":"Desactivar"}</button></td></tr>`).join("")}
+    </table></div>`;
+  $("#nueva").onclick = async () => {
+    const n = prompt("Nombre de la nueva sede"); if (!n || !n.trim()) return;
+    await setDoc(doc(db,"sedes",slug(n)), { nombre:n.trim(), activa:true, orden:sedes.length });
+    await cargarDatos(); vistaAdmin();
+  };
+  $("#panel").querySelectorAll("[data-t]").forEach(b => b.onclick = async () => {
+    const s = sedes.find(x => x.id === b.dataset.t);
+    await updateDoc(doc(db,"sedes",s.id), { activa: s.activa === false });
+    await cargarDatos(); vistaAdmin();
+  });
+}
+
+// Materias
+function panelMaterias() {
+  const areas = [...new Set(materias.map(m => m.area))];
+  $("#panel").innerHTML = `<div class="card"><strong>Materias (iguales en todas las sedes)</strong>
+    ${areas.map(a => `<h4 style="margin:14px 0 4px">${esc(a)}</h4><table>
+      ${materias.filter(m=>m.area===a).map(m=>`<tr><td>${esc(m.nombre)}</td>
+      <td><span class="tag pend">Programa pendiente</span></td></tr>`).join("")}</table>`).join("")}
+    </div>`;
+}
+</script>
+</body>
+</html>
