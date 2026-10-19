@@ -21,6 +21,12 @@
   header .who{font-size:.8rem;opacity:.9;text-align:right}
   header button{background:transparent;border:1px solid #ffffff88;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer}
   main{max-width:980px;margin:0 auto;padding:16px}
+  .inicio{max-width:380px;margin:7vh auto;text-align:center;padding:0 8px}
+  .inicio img{width:min(240px,70vw);margin-bottom:18px}
+  .puertas{display:flex;flex-direction:column;gap:12px;margin-top:10px}
+  .puerta{background:var(--azul-osc);color:#fff;border:0;border-radius:14px;padding:18px;font-size:1.1rem;font-weight:600;cursor:pointer}
+  .puerta:last-child{background:var(--rojo)}
+  code{background:#8882;border-radius:6px;padding:2px 6px;letter-spacing:.05em}
   .login{max-width:380px;margin:12vh auto;text-align:center;background:var(--card);border:1px solid var(--borde);border-radius:16px;padding:28px 22px}
   .login img{width:170px}
   .login h2{margin:.4rem 0 .2rem}
@@ -85,7 +91,7 @@
 <script type="module">
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, writeBatch, query, orderBy, where }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
@@ -120,13 +126,13 @@ const TIPOS = {
   otro: ["Otro", "#4b5b6b"],
 };
 const TABS = {
-  admin: [["cumplimiento","Seguimiento"],["calendario","Calendario"],["docentes","Docentes"],["sedes","Sedes"],["materias","Materias"]],
+  admin: [["cumplimiento","Seguimiento"],["calendario","Calendario"],["catedras","Cátedras"],["equipo","Equipo de gestión"],["sedes","Sedes"],["materias","Materias"]],
   docente: [["mis","Mis tareas"],["calendario","Calendario"]],
 };
 
 // ---------- Utilidades ----------
 const pad = n => String(n).padStart(2, "0");
-const slug = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+const slug = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const $ = (s, r=document) => r.querySelector(s);
 const hoy = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
@@ -135,53 +141,146 @@ const diffDias = (a, b) => Math.round((fechaObj(b) - fechaObj(a)) / 864e5);
 const fmtCorta = f => fechaObj(f).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
 const fmtLarga = f => fechaObj(f).toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" });
 const urlOk = u => /^https?:\/\//i.test(u || "");
-const pid = (sedeId, materiaId, email) => `${sedeId}__${materiaId}__${email}`;
-// Dos perfiles: Administración (admin / coordinador) y Docente.
+const mailOk = m => /^\S+@\S+\.\S+$/.test(m);
+const pid = (sedeId, materiaId) => `${sedeId}__${materiaId}`;
 const rolDe = u => (u?.rol === "admin" || u?.rol === "coordinador") ? "admin" : "docente";
-const esGestion = () => rolDe(me) === "admin";
-// Vista previa: el admin puede ver la pantalla exacta de un docente (solo lectura).
-let preview = null;
-const eff = () => preview || me;
 function addMes(f, n) {
   const [y, m, d] = f.split("-").map(Number);
   const t = new Date(y, m - 1 + n, 1);
   const ult = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
   return `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(Math.min(d, ult))}`;
 }
+function nuevaClave() {
+  const c = "ABCDEFGHJKMNPQRSTUVWXYZ23456789", a = new Uint32Array(6);
+  crypto.getRandomValues(a);
+  return [...a].map(n => c[n % c.length]).join("");
+}
 
 // ---------- Estado ----------
-let me = null;
-let sedes = [], materias = [], usuarios = [], calendario = [], programas = [];
+let me = null;          // administración (cuenta de Google)
+let docSes = null;      // equipo docente: { sedeId, materiaId } (entra con la clave de la cátedra)
+let preview = null;     // administración mirando la pantalla de una cátedra (solo lectura)
+let entrando = false;
+let sedes = [], materias = [], usuarios = [], calendario = [], programas = [], catedras = [];
 let tab = "mis";
-let filtro = { sede: "", materia: "", q: "" };
+let filtro = { sede: "" };
 let fcal = { sede: "", tipo: "", pasados: false };
 let fcum = { sede: "", estado: "" };
+const catActual = () => preview || docSes;
+const esGestion = () => !!me && !docSes;
+const combosActivos = () => sedes.filter(s => s.activa !== false)
+  .flatMap(s => materias.filter(m => m.activa !== false).map(m => ({ sedeId: s.id, materiaId: m.id })));
 
 const app$ = $("#app");
-$("#btnSalir").onclick = () => signOut(auth);
+const setHeader = on => { $("header").style.display = on ? "flex" : "none"; };
+$("#btnSalir").onclick = async () => {
+  if (docSes) { try { await deleteDoc(doc(db, "sesiones", auth.currentUser.uid)); } catch {} }
+  preview = null;
+  await signOut(auth);
+};
+async function cerrarYMostrar(fn) {
+  entrando = true;
+  try { await signOut(auth); } catch {}
+  me = null; docSes = null; preview = null;
+  fn();
+  setTimeout(() => { entrando = false; }, 700);
+}
 
 onAuthStateChanged(auth, async (u) => {
-  if (!u) return pantallaLogin();
-  try { await cargarSesion(u); }
+  if (entrando) return;
+  if (!u) { me = null; docSes = null; preview = null; return pantallaInicio(); }
+  try { u.isAnonymous ? await cargarSesionDocente(u) : await cargarSesion(u); }
   catch (e) { console.error(e); pantallaError(e); }
 });
 
-function pantallaLogin(msg) {
-  $("#who").textContent = ""; $("#btnSalir").hidden = true;
+// ---------- Pantallas de ingreso ----------
+function pantallaInicio(msg) {
+  setHeader(false); $("#who").textContent = ""; $("#btnSalir").hidden = true;
   app$.innerHTML = `
-    <div class="login">
-      <img src="logo.png" alt="EPSA">
-      <h2>EBNE Coordinación</h2>
-      <p>Ingresá con la cuenta de Google que registró la coordinación.</p>
+    <div class="inicio">
+      <img src="logo.png" alt="EBNE">
+      ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
+      <div class="puertas">
+        <button class="puerta" id="pd">Equipo docente</button>
+        <button class="puerta" id="pg">Equipo de gestión</button>
+      </div>
+    </div>`;
+  $("#pd").onclick = () => pantallaDocente();
+  $("#pg").onclick = () => pantallaGestion();
+}
+
+function pantallaGestion(msg) {
+  setHeader(false); $("#who").textContent = ""; $("#btnSalir").hidden = true;
+  app$.innerHTML = `
+    <div class="inicio">
+      <img src="logo.png" alt="EBNE">
+      <h2 style="margin:.2rem 0">Equipo de gestión</h2>
+      <p class="muted" style="margin:0 0 14px">Ingresá con la cuenta de Google habilitada por la administración.</p>
       ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
       <button class="primary" id="go">Ingresar con Google</button>
+      <p><button class="ghost small" id="volver">← Volver</button></p>
     </div>`;
+  $("#volver").onclick = () => pantallaInicio();
   $("#go").onclick = async () => {
     try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-    catch (e) { pantallaLogin("No se pudo iniciar sesión: " + (e.code || e.message)); }
+    catch (e) { pantallaGestion("No se pudo iniciar sesión: " + (e.code || e.message)); }
   };
 }
+
+async function pantallaDocente(msg) {
+  setHeader(false); $("#who").textContent = ""; $("#btnSalir").hidden = true;
+  if (!sedes.length || !materias.length) {
+    app$.innerHTML = `<div class="empty">Cargando…</div>`;
+    try {
+      const [s, m] = await Promise.all([
+        getDocs(query(collection(db, "sedes"), orderBy("orden"))),
+        getDocs(query(collection(db, "materias"), orderBy("orden"))),
+      ]);
+      sedes = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      materias = m.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch (e) { return pantallaInicio("No se pudo cargar la lista de sedes y materias."); }
+  }
+  const ss = sedes.filter(s => s.activa !== false), mm = materias.filter(m => m.activa !== false);
+  app$.innerHTML = `
+    <div class="inicio">
+      <img src="logo.png" alt="EBNE">
+      <h2 style="margin:.2rem 0">Equipo docente</h2>
+      <p class="muted" style="margin:0 0 6px">Elegí tu sede y tu materia, y escribí la clave de la cátedra.</p>
+      ${msg ? `<div class="msg bad">${esc(msg)}</div>` : ""}
+      <div style="text-align:left">
+        <label>Sede</label>
+        <select id="ds" style="width:100%"><option value="">Elegir sede…</option>${ss.map(s => `<option value="${s.id}">${esc(s.nombre)}</option>`).join("")}</select>
+        <label>Materia</label>
+        <select id="dm" style="width:100%"><option value="">Elegir materia…</option>${mm.map(m => `<option value="${m.id}">${esc(m.nombre)}</option>`).join("")}</select>
+        <label>Clave de la cátedra</label>
+        <input id="dc" type="password" autocomplete="off" style="width:100%" placeholder="Clave">
+      </div>
+      <p><button class="primary" id="ing" style="width:100%">Ingresar</button></p>
+      <p><button class="ghost small" id="volver">← Volver</button></p>
+    </div>`;
+  $("#volver").onclick = () => pantallaInicio();
+  const entrar = async () => {
+    const sedeId = $("#ds").value, materiaId = $("#dm").value, clave = $("#dc").value.trim();
+    if (!sedeId || !materiaId || !clave) return pantallaDocente("Elegí sede y materia, y escribí la clave.");
+    $("#ing").disabled = true; entrando = true;
+    try {
+      const cred = await signInAnonymously(auth);
+      await setDoc(doc(db, "sesiones", cred.user.uid), { sedeId, materiaId, clave, creada: new Date().toISOString() });
+      entrando = false;
+      await cargarSesionDocente(cred.user);
+    } catch (e) {
+      console.error(e);
+      await cerrarYMostrar(() => pantallaDocente(e.code === "permission-denied"
+        ? "La clave no corresponde a esa sede y materia."
+        : "No se pudo ingresar: " + (e.code || e.message)));
+    }
+  };
+  $("#ing").onclick = entrar;
+  $("#dc").onkeydown = e => { if (e.key === "Enter") entrar(); };
+}
+
 function pantallaError(e) {
+  setHeader(true);
   app$.innerHTML = `<div class="card"><div class="msg bad">Ocurrió un error: ${esc(e.code || e.message)}</div>
   <button class="ghost" onclick="location.reload()">Reintentar</button></div>`;
 }
@@ -190,49 +289,73 @@ async function cargarSesion(u) {
   const email = u.email.toLowerCase();
   const snap = await getDoc(doc(db, "usuarios", email));
   me = snap.exists() ? { id: email, ...snap.data() } : null;
-  if (!me && email === ADMIN_ORIGEN) me = { id: email, email, nombre: u.displayName || "Administrador", rol: "admin", activo: true, asignaciones: [] };
-  if (!me || me.activo === false) {
-    await signOut(auth);
-    return pantallaLogin("Tu mail (" + email + ") no está habilitado. Pedile el alta a la coordinación.");
+  if (!me && email === ADMIN_ORIGEN) me = { id: email, email, nombre: u.displayName || "Administrador", rol: "admin", activo: true };
+  if (!me || me.activo === false || rolDe(me) !== "admin") {
+    return cerrarYMostrar(() => pantallaGestion("Tu mail (" + email + ") no está habilitado para el equipo de gestión."));
   }
-  $("#who").innerHTML = `${esc(me.nombre || email)}<br>${rolDe(me)==="admin"?"Administración":"Docente"}`;
+  docSes = null; preview = null;
+  setHeader(true);
+  $("#who").innerHTML = `${esc(me.nombre || email)}<br>Equipo de gestión`;
   $("#btnSalir").hidden = false;
-  preview = null; tab = TABS[rolDe(me)][0][0];
+  tab = TABS.admin[0][0];
   await cargarDatos();
   vista();
 }
 
+async function cargarSesionDocente(u) {
+  const s = await getDoc(doc(db, "sesiones", u.uid));
+  if (!s.exists()) return cerrarYMostrar(() => pantallaInicio());
+  me = null; preview = null;
+  docSes = { sedeId: s.data().sedeId, materiaId: s.data().materiaId };
+  try { await cargarDatos(); }
+  catch (e) {
+    if (e.code === "permission-denied")
+      return cerrarYMostrar(() => pantallaDocente("La clave de esa cátedra cambió. Ingresá de nuevo."));
+    throw e;
+  }
+  setHeader(true);
+  $("#who").innerHTML = `${esc(nMat(docSes.materiaId))}<br>${esc(nSede(docSes.sedeId))}`;
+  $("#btnSalir").hidden = false;
+  tab = "mis";
+  vista();
+}
+
 async function cargarDatos() {
-  const gestion = esGestion();
-  const [s, m, c, us, pr] = await Promise.all([
+  const [s, m, c] = await Promise.all([
     getDocs(query(collection(db, "sedes"), orderBy("orden"))),
     getDocs(query(collection(db, "materias"), orderBy("orden"))),
     getDocs(query(collection(db, "calendario"), orderBy("fecha"))),
-    gestion ? getDocs(collection(db, "usuarios")) : Promise.resolve(null),
-    gestion ? getDocs(collection(db, "programas"))
-            : getDocs(query(collection(db, "programas"), where("docenteEmail", "==", me.id))),
   ]);
   sedes = s.docs.map(d => ({ id: d.id, ...d.data() }));
   materias = m.docs.map(d => ({ id: d.id, ...d.data() }));
   calendario = c.docs.map(d => ({ id: d.id, ...d.data() }));
-  programas = pr.docs.map(d => ({ id: d.id, ...d.data() }));
-  if (us) usuarios = us.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre||"").localeCompare(b.nombre||""));
+  if (docSes) {
+    const p = await getDoc(doc(db, "programas", pid(docSes.sedeId, docSes.materiaId)));
+    programas = p.exists() ? [{ id: p.id, ...p.data() }] : [];
+  } else {
+    const [us, pr, ca] = await Promise.all([
+      getDocs(collection(db, "usuarios")), getDocs(collection(db, "programas")), getDocs(collection(db, "catedras")),
+    ]);
+    usuarios = us.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre||"").localeCompare(b.nombre||""));
+    programas = pr.docs.map(d => ({ id: d.id, ...d.data() }));
+    catedras = ca.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
 }
 const nSede = id => id === "todas" ? "Todas las sedes" : (sedes.find(s => s.id === id)?.nombre ?? id);
 const nMat = id => materias.find(m => m.id === id)?.nombre ?? id;
 
 // ---------- Estructura general ----------
 function vista() {
-  const rol = rolDe(eff());
+  const cat = catActual();
+  const rol = cat ? "docente" : "admin";
   if (!TABS[rol].some(t => t[0] === tab)) tab = TABS[rol][0][0];
-  const vacio = rol === "admin" && !preview && (!sedes.length || !materias.length);
-  const docs = usuarios.filter(u => rolDe(u) === "docente" && u.activo !== false);
+  const vacio = rol === "admin" && (!sedes.length || !materias.length);
+  const combos = combosActivos();
   app$.innerHTML = `
-    ${preview ? `<div class="msg row sp"><span>Estás viendo la pantalla de <b>${esc(preview.nombre || preview.email)}</b> (solo lectura).</span>
-      <button class="ghost small" id="salirPrev">Volver a Administración</button></div>` : ""}
-    ${esGestion() && !preview ? `<div class="row" style="margin-bottom:10px"><span class="muted">Ver como docente:</span>
-      <select id="prev"><option value="">Elegir…</option>${docs.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre||d.email)}</option>`).join("")}</select>
-      ${docs.length ? "" : `<span class="muted">(primero agregá un docente)</span>`}</div>` : ""}
+    ${preview ? `<div class="msg row sp"><span>Estás viendo la pantalla del equipo docente de <b>${esc(nMat(preview.materiaId))} · ${esc(nSede(preview.sedeId))}</b> (solo lectura).</span>
+      <button class="ghost small" id="salirPrev">Volver a gestión</button></div>` : ""}
+    ${esGestion() && !preview && combos.length ? `<div class="row" style="margin-bottom:10px"><span class="muted">Ver como equipo docente:</span>
+      <select id="prev"><option value="">Elegir cátedra…</option>${combos.map(c => `<option value="${esc(c.sedeId)}|${esc(c.materiaId)}">${esc(nSede(c.sedeId))} · ${esc(nMat(c.materiaId))}</option>`).join("")}</select></div>` : ""}
     ${vacio ? `<div class="msg row sp"><span>Todavía no hay sedes o materias cargadas.</span>
       <button class="primary" id="seed">Cargar sedes y materias iniciales</button></div>` : ""}
     <nav class="tabs">
@@ -240,10 +363,14 @@ function vista() {
     </nav>
     <section id="panel"></section>`;
   if (vacio) $("#seed").onclick = cargarIniciales;
-  if ($("#prev")) $("#prev").onchange = e => { preview = usuarios.find(u => u.id === e.target.value) || null; tab = "mis"; vista(); };
+  if ($("#prev")) $("#prev").onchange = e => {
+    if (!e.target.value) return;
+    const [sedeId, materiaId] = e.target.value.split("|");
+    preview = { sedeId, materiaId }; tab = "mis"; vista();
+  };
   if ($("#salirPrev")) $("#salirPrev").onclick = () => { preview = null; tab = "cumplimiento"; vista(); };
   app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vista(); });
-  ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, docentes: panelDocentes,
+  ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, catedras: panelCatedras, equipo: panelEquipo,
      sedes: panelSedes, materias: panelMaterias, mis: panelMis })[tab]();
 }
 
@@ -290,56 +417,47 @@ function etiqueta(k, dl) {
 }
 const tag = (k, dl) => { const [c, t] = etiqueta(k, dl); return `<span class="tag ${c}">${esc(t)}</span>`; };
 const enlace = (u, t) => urlOk(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>` : "";
+const ORDEN_K = { atrasado: 0, devuelto: 1, porvencer: 2, cargado: 3, pendiente: 4, aprobado: 5 };
 
-// ---------- Panel docente: Mis tareas ----------
+// ---------- Equipo docente: Mis tareas ----------
 function panelMis() {
-  const yo = eff();
-  const asig = yo.asignaciones || [];
-  const filas = asig.map(a => {
-    const p = programas.find(x => x.id === pid(a.sedeId, a.materiaId, yo.id));
-    const dl = vencimientoDe(a.sedeId);
-    return { a, p, dl, k: claveEstado(p, dl) };
-  });
-  const pend = filas.filter(f => ["atrasado","devuelto","porvencer","pendiente"].includes(f.k))
-    .sort((x, y) => ORDEN_K[x.k] - ORDEN_K[y.k]);
-  const resto = filas.filter(f => !pend.includes(f));
-  const urg = pend.filter(f => f.k === "atrasado" || f.k === "devuelto").length;
+  const cat = catActual();
+  const p = programas.find(x => x.id === pid(cat.sedeId, cat.materiaId));
+  const dl = vencimientoDe(cat.sedeId);
+  const k = claveEstado(p, dl);
+  const pendiente = ["atrasado","devuelto","porvencer","pendiente"].includes(k);
+  const urgente = k === "atrasado" || k === "devuelto";
   const h = hoy();
-  const prox = calendario.filter(e => (e.fechaFin || e.fecha) >= h &&
-    (e.sedeId === "todas" || asig.some(a => a.sedeId === e.sedeId))).slice(0, 3);
-  const btn = f => f.k === "aprobado" ? "" :
-    `<button class="${["pendiente","porvencer","atrasado","devuelto"].includes(f.k) ? "primary" : "ghost"} small" data-p="${esc(f.a.sedeId)}|${esc(f.a.materiaId)}">${f.p ? "Actualizar programa" : "Cargar programa"}</button>`;
-  const card = f => `
-    <div class="card" style="border-left:4px solid ${f.k==="atrasado"?"var(--bad)":f.k==="devuelto"||f.k==="porvencer"?"var(--warn)":"var(--borde)"}">
+  const prox = calendario.filter(e => (e.fechaFin || e.fecha) >= h && (e.sedeId === "todas" || e.sedeId === cat.sedeId)).slice(0, 3);
+  const btn = k === "aprobado" ? "" :
+    `<button class="${pendiente ? "primary" : "ghost"} small" id="cargarProg">${p ? "Actualizar programa" : "Cargar programa"}</button>`;
+  const tarea = `
+    <div class="card" style="${pendiente ? `border-left:4px solid ${k==="atrasado"?"var(--bad)":k==="pendiente"?"var(--borde)":"var(--warn)"}` : ""}">
       <div class="row sp">
-        <div><strong>Cargar el programa de ${esc(nMat(f.a.materiaId))}</strong><br><span class="muted">${esc(nSede(f.a.sedeId))}</span></div>
-        <div>${tag(f.k, f.dl)}</div>
+        <div><strong>${pendiente ? "Cargar el programa de la materia" : "Programa de la materia"}</strong><br><span class="muted">${esc(nMat(cat.materiaId))} · ${esc(nSede(cat.sedeId))}</span></div>
+        <div>${tag(k, dl)}</div>
       </div>
-      ${f.k === "devuelto" && f.p?.comentario ? `<div class="msg" style="margin-top:10px"><b>Coordinación te pidió corregir:</b> ${esc(f.p.comentario)}</div>` : ""}
-      <div class="row" style="margin-top:10px">${btn(f)} ${f.p?.link ? enlace(f.p.link, "Ver lo cargado") : ""}</div>
+      ${k === "devuelto" && p?.comentario ? `<div class="msg" style="margin-top:10px"><b>Coordinación te pidió corregir:</b> ${esc(p.comentario)}</div>` : ""}
+      ${p?.cargadoPor ? `<div class="muted" style="margin-top:8px">Cargado por ${esc(p.cargadoPor)}</div>` : ""}
+      <div class="row" style="margin-top:10px">${btn} ${p?.link ? enlace(p.link, "Ver lo cargado") : ""}</div>
     </div>`;
   $("#panel").innerHTML = `
-    <h2 style="margin:4px 0 10px">Hola, ${esc((yo.nombre||"").split(" ")[0] || "docente")}</h2>
-    ${pend.length ? `<div class="msg ${urg ? "bad" : ""}"><b>Tenés ${pend.length} tarea${pend.length>1?"s":""} pendiente${pend.length>1?"s":""}</b>${urg ? ` · ${urg} urgente${urg>1?"s":""}` : ""}</div>`
-      : filas.length ? `<div class="msg" style="background:#1e8e4e22">Estás al día, no tenés tareas pendientes. ✓</div>` : ""}
-    ${pend.map(card).join("")}
-    ${resto.length ? `<h3 style="margin:18px 0 8px">Al día</h3>${resto.map(f => `
-      <div class="card"><div class="row sp">
-        <div><strong>${esc(nMat(f.a.materiaId))}</strong><br><span class="muted">${esc(nSede(f.a.sedeId))}</span></div>
-        <div>${tag(f.k, f.dl)} ${f.p?.link ? enlace(f.p.link, "Ver programa") : ""}</div></div></div>`).join("")}` : ""}
-    ${!filas.length ? `<div class="card"><div class="empty">Todavía no tenés materias asignadas.</div></div>` : ""}
+    <h2 style="margin:4px 0 2px">${esc(nMat(cat.materiaId))}</h2>
+    <div class="muted" style="margin-bottom:12px">${esc(nSede(cat.sedeId))}</div>
+    ${pendiente ? `<div class="msg ${urgente ? "bad" : ""}"><b>Tenés 1 tarea pendiente</b>${urgente ? " · urgente" : ""}</div>`
+      : `<div class="msg" style="background:#1e8e4e22">Están al día, no hay tareas pendientes. ✓</div>`}
+    ${tarea}
     ${prox.length ? `<h3 style="margin:18px 0 8px">Próximas fechas</h3><div class="card">${prox.map(e => `
       <div class="ev"><span class="dot" style="background:${(TIPOS[e.tipo]||TIPOS.otro)[1]}"></span>
-      <div class="fecha">${esc(fmtLarga(e.fecha))}</div><div class="cuerpo"><strong>${esc(e.titulo)}</strong><br><span class="tag off">${esc(nSede(e.sedeId))}</span></div></div>`).join("")}</div>` : ""}`;
-  $("#panel").querySelectorAll("[data-p]").forEach(b => b.onclick = () => {
+      <div class="fecha">${esc(fmtLarga(e.fecha))}</div><div class="cuerpo"><strong>${esc(e.titulo)}</strong></div></div>`).join("")}</div>` : ""}`;
+  if ($("#cargarProg")) $("#cargarProg").onclick = () => {
     if (preview) { alert("Es una vista previa: acá no se puede cargar nada."); return; }
-    const [sedeId, materiaId] = b.dataset.p.split("|");
-    modalPrograma(sedeId, materiaId);
-  });
+    modalPrograma(cat.sedeId, cat.materiaId);
+  };
 }
 
 function modalPrograma(sedeId, materiaId) {
-  const id = pid(sedeId, materiaId, me.id);
+  const id = pid(sedeId, materiaId);
   const p = programas.find(x => x.id === id);
   const bg = abrirModal(`
     <h3>Programa de ${esc(nMat(materiaId))}</h3>
@@ -347,64 +465,63 @@ function modalPrograma(sedeId, materiaId) {
     <label>Link al programa (Drive u otro)</label>
     <input id="l" type="url" style="width:100%" placeholder="https://drive.google.com/..." value="${esc(p?.link||"")}">
     <p class="muted" style="margin:6px 0 0">En Drive, compartí el archivo con permiso de lectura para quien tenga el link.</p>
+    <label>Tu nombre (quién lo carga)</label>
+    <input id="q" style="width:100%" value="${esc(p?.cargadoPor||"")}">
     <label>Aclaración (opcional)</label>
     <textarea id="n" rows="3">${esc(p?.nota||"")}</textarea>
     <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
     <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Enviar a revisión</button></div>`);
   $("#cancel", bg).onclick = () => bg.remove();
   $("#ok", bg).onclick = async () => {
-    const link = $("#l", bg).value.trim(), err = $("#err", bg);
+    const link = $("#l", bg).value.trim(), quien = $("#q", bg).value.trim(), err = $("#err", bg);
     if (!urlOk(link)) { err.hidden = false; err.textContent = "Pegá un link válido que empiece con http:// o https://"; return; }
+    if (!quien) { err.hidden = false; err.textContent = "Escribí tu nombre."; return; }
     $("#ok", bg).disabled = true;
     try {
       await setDoc(doc(db, "programas", id), {
-        sedeId, materiaId, docenteEmail: me.id, docenteNombre: me.nombre || me.id,
-        link, nota: $("#n", bg).value.trim(), estado: "cargado", comentario: "",
-        cargadoEn: new Date().toISOString(),
+        sedeId, materiaId, link, nota: $("#n", bg).value.trim(), cargadoPor: quien,
+        estado: "cargado", comentario: "", cargadoEn: new Date().toISOString(),
       }, { merge: true });
       bg.remove(); await cargarDatos(); vista();
     } catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
   };
 }
 
-// ---------- Panel de cumplimiento (admin / coordinación) ----------
-const ORDEN_K = { atrasado: 0, devuelto: 1, porvencer: 2, cargado: 3, pendiente: 4, aprobado: 5 };
+// ---------- Gestión: Seguimiento ----------
 function panelCumplimiento() {
-  const todas = [];
-  for (const u of usuarios) {
-    if (u.activo === false) continue;
-    for (const a of (u.asignaciones || [])) {
-      const p = programas.find(x => x.id === pid(a.sedeId, a.materiaId, u.id));
-      const dl = vencimientoDe(a.sedeId);
-      todas.push({ u, a, p, dl, k: claveEstado(p, dl) });
-    }
-  }
-  const base = todas.filter(r => !fcum.sede || r.a.sedeId === fcum.sede);
+  const todas = combosActivos().map(c => {
+    const p = programas.find(x => x.id === pid(c.sedeId, c.materiaId));
+    const dl = vencimientoDe(c.sedeId);
+    const ct = catedras.find(x => x.id === pid(c.sedeId, c.materiaId));
+    return { c, p, dl, ct, k: claveEstado(p, dl) };
+  });
+  const base = todas.filter(r => !fcum.sede || r.c.sedeId === fcum.sede);
   const vis = base.filter(r => !fcum.estado || r.k === fcum.estado)
-    .sort((x, y) => ORDEN_K[x.k] - ORDEN_K[y.k] || (x.u.nombre||"").localeCompare(y.u.nombre||""));
+    .sort((x, y) => ORDEN_K[x.k] - ORDEN_K[y.k] || nMat(x.c.materiaId).localeCompare(nMat(y.c.materiaId)));
   const chips = [["atrasado","Atrasados"],["devuelto","Devueltos"],["porvencer","Por vencer"],["cargado","Para revisar"],["pendiente","Pendientes"],["aprobado","Aprobados"]];
   const sinFecha = sedes.some(s => s.activa !== false && !vencimientoDe(s.id));
+  const sinClave = todas.filter(r => !r.ct?.clave).length;
   $("#panel").innerHTML = `
     ${sinFecha ? `<div class="msg">Falta cargar en el Calendario el <b>vencimiento de programa</b> de alguna sede. Sin esa fecha no se puede calcular el atraso.</div>` : ""}
+    ${sinClave ? `<div class="msg">Hay <b>${sinClave}</b> cátedras sin clave de ingreso. Generalas en la pestaña <b>Cátedras</b>.</div>` : ""}
     <div class="chips">
       ${chips.map(([k,t]) => `<button class="chip ${fcum.estado===k?"on":""}" data-k="${k}"><b>${base.filter(r=>r.k===k).length}</b><span>${t}</span></button>`).join("")}
     </div>
     <div class="card"><div class="row">
       <select id="fs"><option value="">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${fcum.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
       ${fcum.estado ? `<button class="ghost small" id="limpiar">Quitar filtro de estado</button>` : ""}
-      <span class="muted">${vis.length} de ${base.length} programas</span>
+      <span class="muted">${vis.length} de ${base.length} cátedras</span>
     </div></div>
     <div class="card">
-      ${vis.length ? `<table><tr><th>Docente</th><th>Materia · sede</th><th>Estado</th><th></th></tr>
+      ${vis.length ? `<table><tr><th>Cátedra</th><th>Programa</th><th></th></tr>
       ${vis.map(r => `<tr>
-        <td><strong>${esc(r.u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(r.u.email)}</span></td>
-        <td>${esc(nMat(r.a.materiaId))}<br><span class="muted">${esc(nSede(r.a.sedeId))}</span></td>
-        <td>${tag(r.k, r.dl)}${r.p?.comentario && r.k==="devuelto" ? `<br><span class="muted">${esc(r.p.comentario)}</span>`:""}</td>
+        <td><strong>${esc(nMat(r.c.materiaId))}</strong><br><span class="muted">${esc(nSede(r.c.sedeId))}</span></td>
+        <td>${tag(r.k, r.dl)}${r.p?.cargadoPor ? `<br><span class="muted">Cargó ${esc(r.p.cargadoPor)}</span>` : ""}${r.p?.comentario && r.k==="devuelto" ? `<br><span class="muted">${esc(r.p.comentario)}</span>`:""}</td>
         <td>${r.p ? `${enlace(r.p.link,"Ver")}
           ${r.p.estado !== "aprobado" ? `<button class="ghost small" data-ap="${esc(r.p.id)}">Aprobar</button>` : ""}
           ${r.p.estado !== "devuelto" ? `<button class="ghost small danger" data-dv="${esc(r.p.id)}">Devolver</button>` : ""}` : ""}</td>
       </tr>`).join("")}</table>`
-      : `<div class="empty">${todas.length ? "No hay programas con ese filtro." : "Todavía no hay docentes con materias asignadas. Cargalos en la pestaña Docentes."}</div>`}
+      : `<div class="empty">No hay cátedras con ese filtro.</div>`}
     </div>`;
   $("#fs").onchange = e => { fcum.sede = e.target.value; panelCumplimiento(); };
   $("#panel").querySelectorAll("[data-k]").forEach(b => b.onclick = () => { fcum.estado = fcum.estado === b.dataset.k ? "" : b.dataset.k; panelCumplimiento(); });
@@ -414,7 +531,7 @@ function panelCumplimiento() {
     await cargarDatos(); panelCumplimiento();
   });
   $("#panel").querySelectorAll("[data-dv]").forEach(b => b.onclick = async () => {
-    const motivo = prompt("¿Qué tiene que corregir el docente?");
+    const motivo = prompt("¿Qué tiene que corregir el equipo docente?");
     if (motivo === null) return;
     await updateDoc(doc(db, "programas", b.dataset.dv), { estado: "devuelto", comentario: motivo.trim(), revisadoPor: me.id, revisadoEn: new Date().toISOString() });
     await cargarDatos(); panelCumplimiento();
@@ -423,8 +540,8 @@ function panelCumplimiento() {
 
 // ---------- Calendario académico ----------
 function panelCalendario() {
-  const admin = rolDe(eff()) === "admin";
-  const misSedes = new Set((eff().asignaciones || []).map(a => a.sedeId));
+  const admin = !catActual();
+  const misSedes = new Set(catActual() ? [catActual().sedeId] : []);
   const h = hoy();
   let ev = calendario.filter(e =>
     (!fcal.sede || e.sedeId === fcal.sede || e.sedeId === "todas") && (!fcal.tipo || e.tipo === fcal.tipo));
@@ -536,74 +653,105 @@ function descargarIcs(lista) {
   a.download = "calendario-ebne.ics"; document.body.appendChild(a); a.click(); a.remove();
 }
 
-// ---------- Docentes (admin) ----------
-function panelDocentes() {
-  const f = filtro;
-  const lista = usuarios.filter(u =>
-    (!f.sede || (u.asignaciones||[]).some(a => a.sedeId === f.sede)) &&
-    (!f.materia || (u.asignaciones||[]).some(a => a.materiaId === f.materia)) &&
-    (!f.q || ((u.nombre||"") + " " + u.email).toLowerCase().includes(f.q.toLowerCase())));
+// ---------- Gestión: Cátedras (claves y mails de aviso) ----------
+function panelCatedras() {
+  const combos = combosActivos().filter(c => !filtro.sede || c.sedeId === filtro.sede);
+  const ct = c => catedras.find(x => x.id === pid(c.sedeId, c.materiaId));
+  const faltan = combosActivos().filter(c => !ct(c)?.clave).length;
   $("#panel").innerHTML = `
     <div class="card">
       <div class="row sp">
         <div class="row">
-          <input id="q" placeholder="Buscar nombre o mail" value="${esc(f.q)}">
-          <select id="fs"><option value="">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${f.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
-          <select id="fm"><option value="">Todas las materias</option>${materias.map(m=>`<option value="${m.id}" ${f.materia===m.id?"selected":""}>${esc(m.nombre)}</option>`).join("")}</select>
+          <select id="fs"><option value="">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${filtro.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+          <span class="muted">${combos.length} cátedras</span>
         </div>
-        <button class="primary" id="nuevo">+ Agregar</button>
+        ${faltan ? `<button class="primary" id="gen">Generar las ${faltan} claves que faltan</button>` : ""}
       </div>
+      <p class="muted" style="margin:10px 0 0">Cada cátedra (materia en una sede) tiene una clave. El profe y los ayudantes ingresan eligiendo sede, materia y esa clave. Los mails son a donde llegan los avisos.</p>
     </div>
     <div class="card">
-      ${lista.length ? `<table class="hide3"><tr><th>Persona</th><th>Rol</th><th>Materias y sedes</th><th></th></tr>
-      ${lista.map(u => `<tr>
-        <td><strong>${esc(u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(u.email)}</span></td>
-        <td><span class="tag ${u.activo===false?"off":""}">${rolDe(u)==="admin"?"Administración":"Docente"}${u.activo===false?" · inactivo":""}</span></td>
-        <td>${(u.asignaciones||[]).map(a=>`<span class="tag">${esc(nMat(a.materiaId))} · ${esc(nSede(a.sedeId))}</span>`).join("") || `<span class="muted">Sin materias</span>`}</td>
-        <td><button class="ghost" data-e="${esc(u.id)}">Editar</button></td></tr>`).join("")}</table>`
-      : `<div class="empty">No hay personas para mostrar. Agregá la primera con “+ Agregar”.</div>`}
+      <table class="hide3"><tr><th>Cátedra</th><th>Clave</th><th>Mails de aviso</th><th></th></tr>
+      ${combos.map(c => { const x = ct(c); return `<tr>
+        <td><strong>${esc(nMat(c.materiaId))}</strong><br><span class="muted">${esc(nSede(c.sedeId))}</span></td>
+        <td>${x?.clave ? `<code>${esc(x.clave)}</code>` : `<span class="tag warn">Sin clave</span>`}</td>
+        <td>${(x?.mails||[]).map(m => `<span class="tag">${esc(m)}</span>`).join("") || `<span class="muted">Sin mails</span>`}${x?.nombres ? `<br><span class="muted">${esc(x.nombres)}</span>` : ""}</td>
+        <td><button class="ghost small" data-c="${esc(pid(c.sedeId, c.materiaId))}">Editar</button></td></tr>`; }).join("")}
+      </table>
     </div>`;
-  $("#q").oninput = e => { filtro.q = e.target.value; panelDocentes(); $("#q").focus(); $("#q").setSelectionRange(filtro.q.length, filtro.q.length); };
-  $("#fs").onchange = e => { filtro.sede = e.target.value; panelDocentes(); };
-  $("#fm").onchange = e => { filtro.materia = e.target.value; panelDocentes(); };
-  $("#nuevo").onclick = () => modalUsuario(null);
-  $("#panel").querySelectorAll("[data-e]").forEach(b => b.onclick = () => modalUsuario(usuarios.find(u => u.id === b.dataset.e)));
+  $("#fs").onchange = e => { filtro.sede = e.target.value; panelCatedras(); };
+  if ($("#gen")) $("#gen").onclick = async () => {
+    const b = writeBatch(db);
+    combosActivos().filter(c => !ct(c)?.clave).forEach(c =>
+      b.set(doc(db, "catedras", pid(c.sedeId, c.materiaId)), { sedeId: c.sedeId, materiaId: c.materiaId, clave: nuevaClave() }, { merge: true }));
+    await b.commit(); await cargarDatos(); panelCatedras();
+  };
+  $("#panel").querySelectorAll("[data-c]").forEach(b => b.onclick = () => {
+    const [sedeId, materiaId] = b.dataset.c.split("__");
+    modalCatedra(sedeId, materiaId);
+  });
 }
 
-function filaAsig(a = {}) {
-  return `<div class="asig">
-    <select class="as">${sedes.map(s=>`<option value="${s.id}" ${a.sedeId===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
-    <select class="am">${materias.map(m=>`<option value="${m.id}" ${a.materiaId===m.id?"selected":""}>${esc(m.nombre)}</option>`).join("")}</select>
-    <button class="ghost danger" type="button" data-x>✕</button></div>`;
+function modalCatedra(sedeId, materiaId) {
+  const id = pid(sedeId, materiaId);
+  const x = catedras.find(c => c.id === id);
+  const bg = abrirModal(`
+    <h3>${esc(nMat(materiaId))}</h3><div class="muted">${esc(nSede(sedeId))}</div>
+    <label>Clave de ingreso (mínimo 4 caracteres)</label>
+    <div class="row"><input id="k" style="flex:1" value="${esc(x?.clave||"")}"><button class="ghost" type="button" id="g">Generar</button></div>
+    <p class="muted" style="margin:6px 0 0">Si la cambiás, quienes la tienen deberán ingresar de nuevo con la clave nueva.</p>
+    <label>Mails de aviso (separados por coma)</label>
+    <textarea id="m" rows="2" placeholder="profe@gmail.com, ayudante@gmail.com">${esc((x?.mails||[]).join(", "))}</textarea>
+    <label>Quiénes son (opcional, solo para vos)</label>
+    <input id="nn" style="width:100%" value="${esc(x?.nombres||"")}" placeholder="Ej.: Prof. Pérez, ayudante Gómez">
+    <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
+    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
+  $("#g", bg).onclick = () => { $("#k", bg).value = nuevaClave(); };
+  $("#cancel", bg).onclick = () => bg.remove();
+  $("#ok", bg).onclick = async () => {
+    const clave = $("#k", bg).value.trim(), err = $("#err", bg);
+    const mails = $("#m", bg).value.split(/[,;\s]+/).map(m => m.trim().toLowerCase()).filter(Boolean);
+    if (clave.length < 4) { err.hidden = false; err.textContent = "La clave debe tener al menos 4 caracteres."; return; }
+    if (mails.some(m => !mailOk(m))) { err.hidden = false; err.textContent = "Revisá los mails: hay alguno con formato inválido."; return; }
+    $("#ok", bg).disabled = true;
+    try {
+      await setDoc(doc(db, "catedras", id), { sedeId, materiaId, clave, mails, nombres: $("#nn", bg).value.trim() }, { merge: true });
+      bg.remove(); await cargarDatos(); panelCatedras();
+    } catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
+  };
+}
+
+// ---------- Gestión: Equipo de gestión (cuentas de Google) ----------
+function panelEquipo() {
+  const lista = usuarios.filter(u => rolDe(u) === "admin");
+  $("#panel").innerHTML = `
+    <div class="card"><div class="row sp"><strong>Equipo de gestión</strong><button class="primary" id="nuevo">+ Agregar</button></div>
+      <p class="muted">Quienes están acá ingresan por “Equipo de gestión” con su cuenta de Google y ven lo mismo que vos. Sumá a la rectora y a la entidad propietaria.</p>
+      ${lista.length ? `<table><tr><th>Persona</th><th>Estado</th><th></th></tr>
+      ${lista.map(u => `<tr><td><strong>${esc(u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(u.email)}</span></td>
+        <td><span class="tag ${u.activo===false?"off":"ok"}">${u.activo===false?"Inactivo":"Activo"}</span></td>
+        <td><button class="ghost small" data-e="${esc(u.id)}">Editar</button></td></tr>`).join("")}</table>`
+      : `<div class="empty">Solo figurás vos por defecto. Agregá a Lili y a la entidad propietaria.</div>`}
+    </div>`;
+  $("#nuevo").onclick = () => modalUsuario(null);
+  $("#panel").querySelectorAll("[data-e]").forEach(b => b.onclick = () => modalUsuario(usuarios.find(u => u.id === b.dataset.e)));
 }
 function modalUsuario(u) {
   const nuevo = !u;
   const bg = abrirModal(`
-    <h3>${nuevo ? "Agregar persona" : "Editar persona"}</h3>
+    <h3>${nuevo ? "Agregar al equipo de gestión" : "Editar persona"}</h3>
     <label>Nombre y apellido</label><input id="n" style="width:100%" value="${esc(u?.nombre||"")}">
     <label>Mail de Google</label><input id="e" type="email" style="width:100%" value="${esc(u?.email||"")}" ${nuevo?"":"disabled"}>
-    <div class="row"><div style="flex:1"><label>Rol</label>
-      <select id="r" style="width:100%">${[["docente","Docente"],["admin","Administración"]].map(([v,t])=>`<option value="${v}" ${rolDe(u)===v&&u?"selected":""}>${t}</option>`).join("")}</select></div>
-    <div style="flex:1"><label>Estado</label>
-      <select id="a" style="width:100%"><option value="1">Activo</option><option value="0" ${u?.activo===false?"selected":""}>Inactivo</option></select></div></div>
-    <label>Materias y sedes asignadas</label>
-    <div id="asigs">${(u?.asignaciones||[]).map(filaAsig).join("")}</div>
-    <button class="ghost" type="button" id="mas">+ Agregar materia</button>
+    <label>Estado</label>
+    <select id="a" style="width:100%"><option value="1">Activo</option><option value="0" ${u?.activo===false?"selected":""}>Inactivo</option></select>
     <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
     <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
-  const bindX = () => bg.querySelectorAll("[data-x]").forEach(b => b.onclick = () => b.parentElement.remove());
-  bindX();
-  $("#mas", bg).onclick = () => { $("#asigs", bg).insertAdjacentHTML("beforeend", filaAsig()); bindX(); };
   $("#cancel", bg).onclick = () => bg.remove();
   $("#ok", bg).onclick = async () => {
     const email = $("#e", bg).value.trim().toLowerCase(), nombre = $("#n", bg).value.trim();
     const err = $("#err", bg);
-    if (!nombre || !/^\S+@\S+\.\S+$/.test(email)) { err.hidden = false; err.textContent = "Completá nombre y un mail válido."; return; }
-    const asignaciones = [...bg.querySelectorAll(".asig")].map(r => ({ sedeId: $(".as", r).value, materiaId: $(".am", r).value }))
-      .filter((a,i,arr) => arr.findIndex(b => b.sedeId===a.sedeId && b.materiaId===a.materiaId) === i);
-    const data = { email, nombre, rol: $("#r", bg).value, activo: $("#a", bg).value === "1", asignaciones };
+    if (!nombre || !mailOk(email)) { err.hidden = false; err.textContent = "Completá nombre y un mail válido."; return; }
     $("#ok", bg).disabled = true;
-    try { await setDoc(doc(db, "usuarios", email), data, { merge: true }); bg.remove(); await cargarDatos(); vista(); }
+    try { await setDoc(doc(db, "usuarios", email), { email, nombre, rol: "admin", activo: $("#a", bg).value === "1" }, { merge: true }); bg.remove(); await cargarDatos(); vista(); }
     catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
   };
 }
