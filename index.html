@@ -8,10 +8,10 @@
 <style>
   :root{
     --rojo:#c8202f; --azul:#1f6fb2; --azul-osc:#0f4c81; --bg:#f4f6f9; --card:#fff;
-    --txt:#1b2733; --sub:#5b6b7b; --borde:#dbe2ea; --ok:#1e8e4e; --warn:#c77700;
+    --txt:#1b2733; --sub:#5b6b7b; --borde:#dbe2ea; --ok:#1e8e4e; --warn:#c77700; --bad:#c8202f;
   }
   @media (prefers-color-scheme: dark){
-    :root{ --bg:#10161d; --card:#18212b; --txt:#e8eef4; --sub:#9bacbc; --borde:#2a3643; }
+    :root{ --bg:#10161d; --card:#18212b; --txt:#e8eef4; --sub:#9bacbc; --borde:#2a3643; --ok:#43b878; --warn:#e0a03a; --bad:#ff6b78; }
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);}
@@ -27,7 +27,8 @@
   .login p{color:var(--sub);margin:.2rem 0 1.2rem}
   button.primary{background:var(--rojo);color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:600;cursor:pointer;font-size:.95rem}
   button.ghost{background:transparent;color:var(--azul);border:1px solid var(--borde);border-radius:10px;padding:8px 12px;cursor:pointer}
-  button.danger{color:var(--rojo)}
+  button.small{padding:5px 9px;font-size:.82rem;border-radius:8px}
+  button.danger{color:var(--bad)}
   button:disabled{opacity:.5;cursor:default}
   nav.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
   nav.tabs button{background:var(--card);border:1px solid var(--borde);border-radius:999px;padding:8px 14px;cursor:pointer;color:var(--txt)}
@@ -41,8 +42,12 @@
   .tag{display:inline-block;border-radius:999px;padding:2px 9px;font-size:.75rem;background:#1f6fb21f;color:var(--azul);margin:1px 2px 1px 0}
   .tag.off{background:#8881;color:var(--sub)}
   .tag.ok{background:#1e8e4e22;color:var(--ok)}
-  .tag.pend{background:#c7770022;color:var(--warn)}
-  input,select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--borde);border-radius:10px;padding:9px 10px;min-width:0}
+  .tag.pend{background:#8882;color:var(--sub)}
+  .tag.warn{background:#c7770026;color:var(--warn)}
+  .tag.bad{background:#c8202f22;color:var(--bad)}
+  .tag.info{background:#1f6fb22a;color:var(--azul)}
+  input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--borde);border-radius:10px;padding:9px 10px;min-width:0}
+  textarea{width:100%;resize:vertical}
   label{display:block;font-size:.8rem;color:var(--sub);margin:10px 0 4px}
   .modal-bg{position:fixed;inset:0;background:#0008;display:flex;align-items:flex-start;justify-content:center;padding:4vh 12px;overflow:auto;z-index:10}
   .modal{background:var(--card);border-radius:16px;padding:18px;width:100%;max-width:520px;border:1px solid var(--borde)}
@@ -50,9 +55,22 @@
   .asig{display:flex;gap:6px;margin-bottom:6px}
   .asig select{flex:1}
   .msg{padding:10px 12px;border-radius:10px;background:#c7770018;color:var(--txt);margin-bottom:12px;font-size:.9rem}
+  .msg.bad{background:#c8202f18}
   .empty{color:var(--sub);text-align:center;padding:22px}
   .muted{color:var(--sub);font-size:.85rem}
-  @media (max-width:640px){ th:nth-child(3),td:nth-child(3){display:none} }
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .chip{border:1px solid var(--borde);background:var(--card);border-radius:12px;padding:8px 12px;cursor:pointer;text-align:left;color:var(--txt);min-width:96px}
+  .chip b{display:block;font-size:1.3rem}
+  .chip span{font-size:.75rem;color:var(--sub)}
+  .chip.on{border-color:var(--azul);box-shadow:0 0 0 2px #1f6fb244}
+  .mes{margin:16px 0 6px;text-transform:capitalize;font-size:.95rem;color:var(--sub)}
+  .ev{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--borde)}
+  .ev.pasado{opacity:.55}
+  .ev .dot{width:10px;height:10px;border-radius:50%;margin-top:6px;flex:none}
+  .ev .fecha{width:92px;flex:none;font-size:.85rem;text-transform:capitalize}
+  .ev .cuerpo{flex:1;min-width:0}
+  a{color:var(--azul)}
+  @media (max-width:640px){ table.hide3 th:nth-child(3), table.hide3 td:nth-child(3){display:none} .ev .fecha{width:78px} }
 </style>
 </head>
 <body>
@@ -69,7 +87,7 @@ import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, writeBatch, query, orderBy }
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, writeBatch, query, orderBy, where }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const ADMIN_ORIGEN = "cocojleguizamon@gmail.com";
@@ -77,7 +95,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// ---- Datos iniciales ----
+// ---------- Datos iniciales ----------
 const SEDES_INICIALES = ["Córdoba", "Ballester", "CABA"];
 const MATERIAS_INICIALES = [
   ["Natación", "Prácticas y condición física"],
@@ -91,15 +109,50 @@ const MATERIAS_INICIALES = [
   ["Problemática del Ahogamiento", "Fundamento teórico profesional"],
   ["Entornos Acuáticos", "Fundamento teórico profesional"],
 ];
-const slug = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+const TIPOS = {
+  inicio_cuatrimestre: ["Inicio de cuatrimestre", "#1e8e4e"],
+  cierre_cuatrimestre: ["Cierre de cuatrimestre", "#0f4c81"],
+  vencimiento_programa: ["Vencimiento de programa", "#c8202f"],
+  cierre_notas: ["Cierre de notas del mes", "#c77700"],
+  testeo: ["Testeo", "#7b3fb0"],
+  parcial: ["Parcial / examen", "#1f6fb2"],
+  feriado: ["Feriado / sin clases", "#7a8794"],
+  otro: ["Otro", "#4b5b6b"],
+};
+const TABS = {
+  admin: [["cumplimiento","Cumplimiento"],["calendario","Calendario"],["docentes","Docentes"],["sedes","Sedes"],["materias","Materias"]],
+  coordinador: [["cumplimiento","Cumplimiento"],["calendario","Calendario"]],
+  docente: [["mis","Mis materias"],["calendario","Calendario"]],
+};
+
+// ---------- Utilidades ----------
+const pad = n => String(n).padStart(2, "0");
+const slug = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const $ = (s, r=document) => r.querySelector(s);
+const hoy = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
+const fechaObj = f => new Date(f + "T12:00:00");
+const diffDias = (a, b) => Math.round((fechaObj(b) - fechaObj(a)) / 864e5);
+const fmtCorta = f => fechaObj(f).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
+const fmtLarga = f => fechaObj(f).toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" });
+const urlOk = u => /^https?:\/\//i.test(u || "");
+const pid = (sedeId, materiaId, email) => `${sedeId}__${materiaId}__${email}`;
+const rolDe = u => TABS[u?.rol] ? u.rol : "docente";
+const esGestion = () => rolDe(me) !== "docente";
+function addMes(f, n) {
+  const [y, m, d] = f.split("-").map(Number);
+  const t = new Date(y, m - 1 + n, 1);
+  const ult = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+  return `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(Math.min(d, ult))}`;
+}
 
-// ---- Estado ----
-let me = null;            // perfil del usuario actual
-let sedes = [], materias = [], usuarios = [];
-let tab = "docentes";
+// ---------- Estado ----------
+let me = null;
+let sedes = [], materias = [], usuarios = [], calendario = [], programas = [];
+let tab = "mis";
 let filtro = { sede: "", materia: "", q: "" };
+let fcal = { sede: "", tipo: "", pasados: false };
+let fcum = { sede: "", estado: "" };
 
 const app$ = $("#app");
 $("#btnSalir").onclick = () => signOut(auth);
@@ -126,86 +179,343 @@ function pantallaLogin(msg) {
   };
 }
 function pantallaError(e) {
-  app$.innerHTML = `<div class="card"><div class="msg">Ocurrió un error: ${esc(e.code || e.message)}</div>
+  app$.innerHTML = `<div class="card"><div class="msg bad">Ocurrió un error: ${esc(e.code || e.message)}</div>
   <button class="ghost" onclick="location.reload()">Reintentar</button></div>`;
 }
 
 async function cargarSesion(u) {
   const email = u.email.toLowerCase();
-  const esOrigen = email === ADMIN_ORIGEN;
   const snap = await getDoc(doc(db, "usuarios", email));
   me = snap.exists() ? { id: email, ...snap.data() } : null;
-  if (!me && esOrigen) me = { id: email, email, nombre: u.displayName || "Administrador", rol: "admin", activo: true, asignaciones: [] };
+  if (!me && email === ADMIN_ORIGEN) me = { id: email, email, nombre: u.displayName || "Administrador", rol: "admin", activo: true, asignaciones: [] };
   if (!me || me.activo === false) {
     await signOut(auth);
     return pantallaLogin("Tu mail (" + email + ") no está habilitado. Pedile el alta a la coordinación.");
   }
   $("#who").innerHTML = `${esc(me.nombre || email)}<br>${esc(me.rol)}`;
   $("#btnSalir").hidden = false;
+  tab = TABS[rolDe(me)][0][0];
   await cargarDatos();
-  me.rol === "admin" ? vistaAdmin() : vistaDocente();
+  vista();
 }
 
 async function cargarDatos() {
-  const [s, m] = await Promise.all([
+  const gestion = esGestion();
+  const [s, m, c, us, pr] = await Promise.all([
     getDocs(query(collection(db, "sedes"), orderBy("orden"))),
     getDocs(query(collection(db, "materias"), orderBy("orden"))),
+    getDocs(query(collection(db, "calendario"), orderBy("fecha"))),
+    gestion ? getDocs(collection(db, "usuarios")) : Promise.resolve(null),
+    gestion ? getDocs(collection(db, "programas"))
+            : getDocs(query(collection(db, "programas"), where("docenteEmail", "==", me.id))),
   ]);
   sedes = s.docs.map(d => ({ id: d.id, ...d.data() }));
   materias = m.docs.map(d => ({ id: d.id, ...d.data() }));
-  if (me.rol === "admin") {
-    const us = await getDocs(collection(db, "usuarios"));
-    usuarios = us.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre||"").localeCompare(b.nombre||""));
-  }
+  calendario = c.docs.map(d => ({ id: d.id, ...d.data() }));
+  programas = pr.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (us) usuarios = us.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre||"").localeCompare(b.nombre||""));
 }
-const nSede = id => sedes.find(s => s.id === id)?.nombre ?? id;
+const nSede = id => id === "todas" ? "Todas las sedes" : (sedes.find(s => s.id === id)?.nombre ?? id);
 const nMat = id => materias.find(m => m.id === id)?.nombre ?? id;
 
-// ---- Vista docente (por ahora: sus materias) ----
-function vistaDocente() {
-  const asig = me.asignaciones || [];
-  app$.innerHTML = `
-    <h2>Hola, ${esc((me.nombre||"").split(" ")[0] || "docente")}</h2>
-    <div class="card">
-      <strong>Tus materias</strong>
-      ${asig.length ? `<table><tr><th>Materia</th><th>Sede</th><th>Programa</th></tr>
-        ${asig.map(a => `<tr><td>${esc(nMat(a.materiaId))}</td><td>${esc(nSede(a.sedeId))}</td>
-        <td><span class="tag pend">Pendiente</span></td></tr>`).join("")}</table>
-        <p class="muted">Próximamente: cargá acá el programa de cada materia antes del inicio.</p>`
-      : `<div class="empty">Todavía no tenés materias asignadas.</div>`}
-    </div>`;
-}
-
-// ---- Vista admin ----
-function vistaAdmin() {
-  const vacio = !sedes.length || !materias.length;
+// ---------- Estructura general ----------
+function vista() {
+  const rol = rolDe(me);
+  const vacio = rol === "admin" && (!sedes.length || !materias.length);
   app$.innerHTML = `
     ${vacio ? `<div class="msg row sp"><span>Todavía no hay sedes o materias cargadas.</span>
       <button class="primary" id="seed">Cargar sedes y materias iniciales</button></div>` : ""}
     <nav class="tabs">
-      ${[["docentes","Docentes"],["sedes","Sedes"],["materias","Materias"]]
-        .map(([k,t]) => `<button data-t="${k}" class="${tab===k?"on":""}">${t}</button>`).join("")}
+      ${TABS[rol].map(([k,t]) => `<button data-t="${k}" class="${tab===k?"on":""}">${t}</button>`).join("")}
     </nav>
     <section id="panel"></section>`;
   if (vacio) $("#seed").onclick = cargarIniciales;
-  app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vistaAdmin(); });
-  ({ docentes: panelDocentes, sedes: panelSedes, materias: panelMaterias })[tab]();
+  app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vista(); });
+  ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, docentes: panelDocentes,
+     sedes: panelSedes, materias: panelMaterias, mis: panelMis })[tab]();
+}
+
+function abrirModal(html) {
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal">${html}</div>`;
+  document.body.appendChild(bg);
+  return bg;
 }
 
 async function cargarIniciales() {
   const b = writeBatch(db);
   if (!sedes.length) SEDES_INICIALES.forEach((n,i) => b.set(doc(db,"sedes",slug(n)), { nombre:n, activa:true, orden:i }));
   if (!materias.length) MATERIAS_INICIALES.forEach(([n,a],i) => b.set(doc(db,"materias",slug(n)), { nombre:n, area:a, activa:true, orden:i }));
-  await b.commit(); await cargarDatos(); vistaAdmin();
+  await b.commit(); await cargarDatos(); vista();
 }
 
-// Docentes
+// ---------- Programas: fechas límite y estados ----------
+function vencimientoDe(sedeId) {
+  const l = calendario
+    .filter(e => e.tipo === "vencimiento_programa" && (e.sedeId === "todas" || e.sedeId === sedeId))
+    .sort((a,b) => a.fecha.localeCompare(b.fecha));
+  return l.find(e => e.fecha >= hoy()) || l[l.length - 1] || null;
+}
+function claveEstado(p, dl) {
+  if (p?.estado === "aprobado") return "aprobado";
+  if (p?.estado === "cargado") return "cargado";
+  if (p?.estado === "devuelto") return "devuelto";
+  if (!dl) return "pendiente";
+  const d = diffDias(hoy(), dl.fecha);
+  return d < 0 ? "atrasado" : d <= 7 ? "porvencer" : "pendiente";
+}
+function etiqueta(k, dl) {
+  const d = dl ? diffDias(hoy(), dl.fecha) : null;
+  switch (k) {
+    case "aprobado": return ["ok", "Aprobado"];
+    case "cargado": return ["info", "Para revisar"];
+    case "devuelto": return ["warn", "Devuelto"];
+    case "atrasado": return ["bad", `Atrasado ${-d} d`];
+    case "porvencer": return ["warn", d === 0 ? "Vence hoy" : `Vence en ${d} d`];
+    default: return ["pend", dl ? `Pendiente · vence ${fmtCorta(dl.fecha)}` : "Pendiente · sin fecha límite"];
+  }
+}
+const tag = (k, dl) => { const [c, t] = etiqueta(k, dl); return `<span class="tag ${c}">${esc(t)}</span>`; };
+const enlace = (u, t) => urlOk(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>` : "";
+
+// ---------- Panel docente: Mis materias ----------
+function panelMis() {
+  const asig = me.asignaciones || [];
+  const filas = asig.map(a => {
+    const p = programas.find(x => x.id === pid(a.sedeId, a.materiaId, me.id));
+    const dl = vencimientoDe(a.sedeId);
+    return { a, p, dl, k: claveEstado(p, dl) };
+  });
+  const urgentes = filas.filter(f => f.k === "atrasado" || f.k === "devuelto").length;
+  $("#panel").innerHTML = `
+    <h2 style="margin-top:4px">Hola, ${esc((me.nombre||"").split(" ")[0] || "docente")}</h2>
+    ${urgentes ? `<div class="msg bad">Tenés ${urgentes} programa${urgentes>1?"s":""} para atender (atrasado o devuelto).</div>` : ""}
+    ${filas.length ? filas.map(({a,p,dl,k}) => `
+      <div class="card">
+        <div class="row sp">
+          <div><strong>${esc(nMat(a.materiaId))}</strong><br><span class="muted">${esc(nSede(a.sedeId))}</span></div>
+          <div>${tag(k, dl)}</div>
+        </div>
+        ${k === "devuelto" && p?.comentario ? `<div class="msg" style="margin-top:10px"><b>Comentario de coordinación:</b> ${esc(p.comentario)}</div>` : ""}
+        <div class="row" style="margin-top:10px">
+          ${p?.link ? enlace(p.link, "Ver programa cargado") : ""}
+          ${k === "aprobado" ? `<span class="muted">Programa aprobado ✓</span>`
+            : `<button class="ghost small" data-p="${esc(a.sedeId)}|${esc(a.materiaId)}">${p ? "Actualizar programa" : "Cargar programa"}</button>`}
+        </div>
+      </div>`).join("")
+    : `<div class="card"><div class="empty">Todavía no tenés materias asignadas.</div></div>`}`;
+  $("#panel").querySelectorAll("[data-p]").forEach(b => b.onclick = () => {
+    const [sedeId, materiaId] = b.dataset.p.split("|");
+    modalPrograma(sedeId, materiaId);
+  });
+}
+
+function modalPrograma(sedeId, materiaId) {
+  const id = pid(sedeId, materiaId, me.id);
+  const p = programas.find(x => x.id === id);
+  const bg = abrirModal(`
+    <h3>Programa de ${esc(nMat(materiaId))}</h3>
+    <div class="muted">${esc(nSede(sedeId))}</div>
+    <label>Link al programa (Drive u otro)</label>
+    <input id="l" type="url" style="width:100%" placeholder="https://drive.google.com/..." value="${esc(p?.link||"")}">
+    <p class="muted" style="margin:6px 0 0">En Drive, compartí el archivo con permiso de lectura para quien tenga el link.</p>
+    <label>Aclaración (opcional)</label>
+    <textarea id="n" rows="3">${esc(p?.nota||"")}</textarea>
+    <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
+    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Enviar a revisión</button></div>`);
+  $("#cancel", bg).onclick = () => bg.remove();
+  $("#ok", bg).onclick = async () => {
+    const link = $("#l", bg).value.trim(), err = $("#err", bg);
+    if (!urlOk(link)) { err.hidden = false; err.textContent = "Pegá un link válido que empiece con http:// o https://"; return; }
+    $("#ok", bg).disabled = true;
+    try {
+      await setDoc(doc(db, "programas", id), {
+        sedeId, materiaId, docenteEmail: me.id, docenteNombre: me.nombre || me.id,
+        link, nota: $("#n", bg).value.trim(), estado: "cargado", comentario: "",
+        cargadoEn: new Date().toISOString(),
+      }, { merge: true });
+      bg.remove(); await cargarDatos(); vista();
+    } catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
+  };
+}
+
+// ---------- Panel de cumplimiento (admin / coordinación) ----------
+const ORDEN_K = { atrasado: 0, devuelto: 1, porvencer: 2, cargado: 3, pendiente: 4, aprobado: 5 };
+function panelCumplimiento() {
+  const todas = [];
+  for (const u of usuarios) {
+    if (u.activo === false) continue;
+    for (const a of (u.asignaciones || [])) {
+      const p = programas.find(x => x.id === pid(a.sedeId, a.materiaId, u.id));
+      const dl = vencimientoDe(a.sedeId);
+      todas.push({ u, a, p, dl, k: claveEstado(p, dl) });
+    }
+  }
+  const base = todas.filter(r => !fcum.sede || r.a.sedeId === fcum.sede);
+  const vis = base.filter(r => !fcum.estado || r.k === fcum.estado)
+    .sort((x, y) => ORDEN_K[x.k] - ORDEN_K[y.k] || (x.u.nombre||"").localeCompare(y.u.nombre||""));
+  const chips = [["atrasado","Atrasados"],["devuelto","Devueltos"],["porvencer","Por vencer"],["cargado","Para revisar"],["pendiente","Pendientes"],["aprobado","Aprobados"]];
+  const sinFecha = sedes.some(s => s.activa !== false && !vencimientoDe(s.id));
+  $("#panel").innerHTML = `
+    ${sinFecha ? `<div class="msg">Falta cargar en el Calendario el <b>vencimiento de programa</b> de alguna sede. Sin esa fecha no se puede calcular el atraso.</div>` : ""}
+    <div class="chips">
+      ${chips.map(([k,t]) => `<button class="chip ${fcum.estado===k?"on":""}" data-k="${k}"><b>${base.filter(r=>r.k===k).length}</b><span>${t}</span></button>`).join("")}
+    </div>
+    <div class="card"><div class="row">
+      <select id="fs"><option value="">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${fcum.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+      ${fcum.estado ? `<button class="ghost small" id="limpiar">Quitar filtro de estado</button>` : ""}
+      <span class="muted">${vis.length} de ${base.length} programas</span>
+    </div></div>
+    <div class="card">
+      ${vis.length ? `<table><tr><th>Docente</th><th>Materia · sede</th><th>Estado</th><th></th></tr>
+      ${vis.map(r => `<tr>
+        <td><strong>${esc(r.u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(r.u.email)}</span></td>
+        <td>${esc(nMat(r.a.materiaId))}<br><span class="muted">${esc(nSede(r.a.sedeId))}</span></td>
+        <td>${tag(r.k, r.dl)}${r.p?.comentario && r.k==="devuelto" ? `<br><span class="muted">${esc(r.p.comentario)}</span>`:""}</td>
+        <td>${r.p ? `${enlace(r.p.link,"Ver")}
+          ${r.p.estado !== "aprobado" ? `<button class="ghost small" data-ap="${esc(r.p.id)}">Aprobar</button>` : ""}
+          ${r.p.estado !== "devuelto" ? `<button class="ghost small danger" data-dv="${esc(r.p.id)}">Devolver</button>` : ""}` : ""}</td>
+      </tr>`).join("")}</table>`
+      : `<div class="empty">${todas.length ? "No hay programas con ese filtro." : "Todavía no hay docentes con materias asignadas. Cargalos en la pestaña Docentes."}</div>`}
+    </div>`;
+  $("#fs").onchange = e => { fcum.sede = e.target.value; panelCumplimiento(); };
+  $("#panel").querySelectorAll("[data-k]").forEach(b => b.onclick = () => { fcum.estado = fcum.estado === b.dataset.k ? "" : b.dataset.k; panelCumplimiento(); });
+  if ($("#limpiar")) $("#limpiar").onclick = () => { fcum.estado = ""; panelCumplimiento(); };
+  $("#panel").querySelectorAll("[data-ap]").forEach(b => b.onclick = async () => {
+    await updateDoc(doc(db, "programas", b.dataset.ap), { estado: "aprobado", comentario: "", revisadoPor: me.id, revisadoEn: new Date().toISOString() });
+    await cargarDatos(); panelCumplimiento();
+  });
+  $("#panel").querySelectorAll("[data-dv]").forEach(b => b.onclick = async () => {
+    const motivo = prompt("¿Qué tiene que corregir el docente?");
+    if (motivo === null) return;
+    await updateDoc(doc(db, "programas", b.dataset.dv), { estado: "devuelto", comentario: motivo.trim(), revisadoPor: me.id, revisadoEn: new Date().toISOString() });
+    await cargarDatos(); panelCumplimiento();
+  });
+}
+
+// ---------- Calendario académico ----------
+function panelCalendario() {
+  const admin = me.rol === "admin";
+  const misSedes = new Set((me.asignaciones || []).map(a => a.sedeId));
+  const h = hoy();
+  let ev = calendario.filter(e =>
+    (!fcal.sede || e.sedeId === fcal.sede || e.sedeId === "todas") && (!fcal.tipo || e.tipo === fcal.tipo));
+  if (me.rol === "docente" && !fcal.sede && misSedes.size) ev = ev.filter(e => e.sedeId === "todas" || misSedes.has(e.sedeId));
+  if (!fcal.pasados) ev = ev.filter(e => (e.fechaFin || e.fecha) >= h);
+  const meses = {};
+  ev.forEach(e => (meses[e.fecha.slice(0,7)] ||= []).push(e));
+  $("#panel").innerHTML = `
+    <div class="card">
+      <div class="row sp">
+        <div class="row">
+          <select id="cs"><option value="">${me.rol==="docente"?"Mis sedes":"Todas las sedes"}</option>${sedes.map(s=>`<option value="${s.id}" ${fcal.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+          <select id="ct"><option value="">Todos los tipos</option>${Object.entries(TIPOS).map(([k,[t]])=>`<option value="${k}" ${fcal.tipo===k?"selected":""}>${esc(t)}</option>`).join("")}</select>
+          <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="cp" ${fcal.pasados?"checked":""}> Ver pasados</label>
+        </div>
+        <div class="row">
+          <button class="ghost" id="ics">Sumar a Google Calendar</button>
+          ${admin ? `<button class="primary" id="nuevoEv">+ Nuevo evento</button>` : ""}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      ${ev.length ? Object.keys(meses).sort().map(k => `
+        <div class="mes">${esc(fechaObj(k + "-15").toLocaleDateString("es-AR", { month: "long", year: "numeric" }))}</div>
+        ${meses[k].map(e => `
+          <div class="ev ${(e.fechaFin||e.fecha) < h ? "pasado" : ""}">
+            <span class="dot" style="background:${(TIPOS[e.tipo]||TIPOS.otro)[1]}"></span>
+            <div class="fecha">${esc(fmtLarga(e.fecha))}${e.fechaFin && e.fechaFin !== e.fecha ? `<br><span class="muted">al ${esc(fmtLarga(e.fechaFin))}</span>` : ""}</div>
+            <div class="cuerpo"><strong>${esc(e.titulo)}</strong><br>
+              <span class="tag">${esc((TIPOS[e.tipo]||TIPOS.otro)[0])}</span><span class="tag off">${esc(nSede(e.sedeId))}</span>
+              ${e.notas ? `<div class="muted">${esc(e.notas)}</div>` : ""}</div>
+            ${admin ? `<div class="row"><button class="ghost small" data-ee="${esc(e.id)}">Editar</button><button class="ghost small danger" data-del="${esc(e.id)}">Borrar</button></div>` : ""}
+          </div>`).join("")}`).join("")
+      : `<div class="empty">${calendario.length ? "No hay eventos con ese filtro." : (admin ? "Todavía no cargaste eventos. Empezá con el vencimiento de programas: sin esa fecha no se calculan los atrasos." : "Todavía no hay eventos publicados.")}</div>`}
+    </div>`;
+  $("#cs").onchange = e => { fcal.sede = e.target.value; panelCalendario(); };
+  $("#ct").onchange = e => { fcal.tipo = e.target.value; panelCalendario(); };
+  $("#cp").onchange = e => { fcal.pasados = e.target.checked; panelCalendario(); };
+  $("#ics").onclick = () => descargarIcs(ev);
+  if (admin) {
+    $("#nuevoEv").onclick = () => modalEvento(null);
+    $("#panel").querySelectorAll("[data-ee]").forEach(b => b.onclick = () => modalEvento(calendario.find(e => e.id === b.dataset.ee)));
+    $("#panel").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+      const e = calendario.find(x => x.id === b.dataset.del);
+      if (!confirm(`¿Borrar "${e.titulo}"?`)) return;
+      await deleteDoc(doc(db, "calendario", e.id)); await cargarDatos(); panelCalendario();
+    });
+  }
+}
+
+function modalEvento(e) {
+  const nuevo = !e;
+  const bg = abrirModal(`
+    <h3>${nuevo ? "Nuevo evento" : "Editar evento"}</h3>
+    <label>Título</label><input id="t" style="width:100%" value="${esc(e?.titulo||"")}" placeholder="Ej.: Vencimiento de programas 2027">
+    <div class="row"><div style="flex:1"><label>Tipo</label>
+      <select id="tp" style="width:100%">${Object.entries(TIPOS).map(([k,[t]])=>`<option value="${k}" ${e?.tipo===k?"selected":""}>${esc(t)}</option>`).join("")}</select></div>
+    <div style="flex:1"><label>Sede</label>
+      <select id="sd" style="width:100%"><option value="todas">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${e?.sedeId===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select></div></div>
+    <div class="row"><div style="flex:1"><label>Fecha</label><input id="f" type="date" style="width:100%" value="${esc(e?.fecha||"")}"></div>
+    <div style="flex:1"><label>Hasta (opcional)</label><input id="ff" type="date" style="width:100%" value="${esc(e?.fechaFin||"")}"></div></div>
+    ${nuevo ? `<label>Repetir cada mes hasta (opcional)</label><input id="rp" type="date" style="width:100%">
+      <p class="muted" style="margin:6px 0 0">Útil para el cierre de notas mensual: crea un evento por mes con el mismo día.</p>` : ""}
+    <label>Notas (opcional)</label><textarea id="n" rows="2">${esc(e?.notas||"")}</textarea>
+    <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
+    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
+  $("#cancel", bg).onclick = () => bg.remove();
+  $("#ok", bg).onclick = async () => {
+    const err = $("#err", bg);
+    const base = { titulo: $("#t", bg).value.trim(), tipo: $("#tp", bg).value, sedeId: $("#sd", bg).value,
+      fecha: $("#f", bg).value, fechaFin: $("#ff", bg).value || "", notas: $("#n", bg).value.trim() };
+    const rp = nuevo ? $("#rp", bg).value : "";
+    if (!base.titulo || !base.fecha) { err.hidden = false; err.textContent = "Completá el título y la fecha."; return; }
+    if (base.fechaFin && base.fechaFin < base.fecha) { err.hidden = false; err.textContent = "La fecha 'hasta' no puede ser anterior a la fecha de inicio."; return; }
+    if (rp && rp < base.fecha) { err.hidden = false; err.textContent = "'Repetir hasta' tiene que ser posterior a la fecha."; return; }
+    $("#ok", bg).disabled = true;
+    try {
+      if (!nuevo) await setDoc(doc(db, "calendario", e.id), base);
+      else if (!rp) await setDoc(doc(collection(db, "calendario")), base);
+      else {
+        const b = writeBatch(db);
+        const dur = base.fechaFin ? diffDias(base.fecha, base.fechaFin) : 0;
+        for (let i = 0; i < 24; i++) {
+          const f = addMes(base.fecha, i);
+          if (f > rp) break;
+          const ev = { ...base, fecha: f, fechaFin: dur ? (() => { const t = fechaObj(f); t.setDate(t.getDate() + dur); return `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(t.getDate())}`; })() : "" };
+          b.set(doc(collection(db, "calendario")), ev);
+        }
+        await b.commit();
+      }
+      bg.remove(); await cargarDatos(); panelCalendario();
+    } catch (x) { err.hidden = false; err.textContent = "No se pudo guardar: " + (x.code||x.message); $("#ok", bg).disabled = false; }
+  };
+}
+
+function descargarIcs(lista) {
+  if (!lista.length) { alert("No hay eventos para descargar con el filtro actual."); return; }
+  const t = s => String(s || "").replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");
+  const d8 = f => f.replace(/-/g, "");
+  const sig = f => { const x = fechaObj(f); x.setDate(x.getDate() + 1); return `${x.getFullYear()}${pad(x.getMonth()+1)}${pad(x.getDate())}`; };
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const L = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//EBNE Coordinacion//ES","CALSCALE:GREGORIAN","X-WR-CALNAME:Calendario académico EBNE"];
+  lista.forEach(e => L.push("BEGIN:VEVENT", `UID:${e.id}@ebne-app`, `DTSTAMP:${stamp}`,
+    `DTSTART;VALUE=DATE:${d8(e.fecha)}`, `DTEND;VALUE=DATE:${sig(e.fechaFin || e.fecha)}`,
+    `SUMMARY:${t(e.titulo)}`, `DESCRIPTION:${t(`${(TIPOS[e.tipo]||TIPOS.otro)[0]} · ${nSede(e.sedeId)}${e.notas ? " · " + e.notas : ""}`)}`, "END:VEVENT"));
+  L.push("END:VCALENDAR");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([L.join("\r\n")], { type: "text/calendar;charset=utf-8" }));
+  a.download = "calendario-ebne.ics"; document.body.appendChild(a); a.click(); a.remove();
+}
+
+// ---------- Docentes (admin) ----------
 function panelDocentes() {
   const f = filtro;
   const lista = usuarios.filter(u =>
     (!f.sede || (u.asignaciones||[]).some(a => a.sedeId === f.sede)) &&
     (!f.materia || (u.asignaciones||[]).some(a => a.materiaId === f.materia)) &&
-    (!f.q || (u.nombre + " " + u.email).toLowerCase().includes(f.q.toLowerCase())));
+    (!f.q || ((u.nombre||"") + " " + u.email).toLowerCase().includes(f.q.toLowerCase())));
   $("#panel").innerHTML = `
     <div class="card">
       <div class="row sp">
@@ -218,7 +528,7 @@ function panelDocentes() {
       </div>
     </div>
     <div class="card">
-      ${lista.length ? `<table><tr><th>Persona</th><th>Rol</th><th>Materias y sedes</th><th></th></tr>
+      ${lista.length ? `<table class="hide3"><tr><th>Persona</th><th>Rol</th><th>Materias y sedes</th><th></th></tr>
       ${lista.map(u => `<tr>
         <td><strong>${esc(u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(u.email)}</span></td>
         <td><span class="tag ${u.activo===false?"off":""}">${esc(u.rol)}${u.activo===false?" · inactivo":""}</span></td>
@@ -241,9 +551,7 @@ function filaAsig(a = {}) {
 }
 function modalUsuario(u) {
   const nuevo = !u;
-  const bg = document.createElement("div");
-  bg.className = "modal-bg";
-  bg.innerHTML = `<div class="modal">
+  const bg = abrirModal(`
     <h3>${nuevo ? "Agregar persona" : "Editar persona"}</h3>
     <label>Nombre y apellido</label><input id="n" style="width:100%" value="${esc(u?.nombre||"")}">
     <label>Mail de Google</label><input id="e" type="email" style="width:100%" value="${esc(u?.email||"")}" ${nuevo?"":"disabled"}>
@@ -254,10 +562,8 @@ function modalUsuario(u) {
     <label>Materias y sedes asignadas</label>
     <div id="asigs">${(u?.asignaciones||[]).map(filaAsig).join("")}</div>
     <button class="ghost" type="button" id="mas">+ Agregar materia</button>
-    <div id="err" class="msg" hidden></div>
-    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>
-  </div>`;
-  document.body.appendChild(bg);
+    <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
+    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
   const bindX = () => bg.querySelectorAll("[data-x]").forEach(b => b.onclick = () => b.parentElement.remove());
   bindX();
   $("#mas", bg).onclick = () => { $("#asigs", bg).insertAdjacentHTML("beforeend", filaAsig()); bindX(); };
@@ -270,12 +576,12 @@ function modalUsuario(u) {
       .filter((a,i,arr) => arr.findIndex(b => b.sedeId===a.sedeId && b.materiaId===a.materiaId) === i);
     const data = { email, nombre, rol: $("#r", bg).value, activo: $("#a", bg).value === "1", asignaciones };
     $("#ok", bg).disabled = true;
-    try { await setDoc(doc(db, "usuarios", email), data, { merge: true }); bg.remove(); await cargarDatos(); vistaAdmin(); }
+    try { await setDoc(doc(db, "usuarios", email), data, { merge: true }); bg.remove(); await cargarDatos(); vista(); }
     catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
   };
 }
 
-// Sedes
+// ---------- Sedes y materias (admin) ----------
 function panelSedes() {
   $("#panel").innerHTML = `
     <div class="card"><div class="row sp"><strong>Sedes</strong><button class="primary" id="nueva">+ Nueva sede</button></div>
@@ -287,22 +593,20 @@ function panelSedes() {
   $("#nueva").onclick = async () => {
     const n = prompt("Nombre de la nueva sede"); if (!n || !n.trim()) return;
     await setDoc(doc(db,"sedes",slug(n)), { nombre:n.trim(), activa:true, orden:sedes.length });
-    await cargarDatos(); vistaAdmin();
+    await cargarDatos(); vista();
   };
   $("#panel").querySelectorAll("[data-t]").forEach(b => b.onclick = async () => {
     const s = sedes.find(x => x.id === b.dataset.t);
     await updateDoc(doc(db,"sedes",s.id), { activa: s.activa === false });
-    await cargarDatos(); vistaAdmin();
+    await cargarDatos(); vista();
   });
 }
 
-// Materias
 function panelMaterias() {
   const areas = [...new Set(materias.map(m => m.area))];
   $("#panel").innerHTML = `<div class="card"><strong>Materias (iguales en todas las sedes)</strong>
     ${areas.map(a => `<h4 style="margin:14px 0 4px">${esc(a)}</h4><table>
-      ${materias.filter(m=>m.area===a).map(m=>`<tr><td>${esc(m.nombre)}</td>
-      <td><span class="tag pend">Programa pendiente</span></td></tr>`).join("")}</table>`).join("")}
+      ${materias.filter(m=>m.area===a).map(m=>`<tr><td>${esc(m.nombre)}</td></tr>`).join("")}</table>`).join("")}
     </div>`;
 }
 </script>

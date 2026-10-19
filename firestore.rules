@@ -12,10 +12,11 @@ service cloud.firestore {
         || (tienePerfil() && perfil().rol == 'admin' && perfil().activo == true));
     }
     function activo() { return signedIn() && tienePerfil() && perfil().activo == true; }
+    function esGestion() { return isAdmin() || (activo() && perfil().rol == 'coordinador'); }
 
-    // Usuarios: cada uno lee su propio perfil; el admin lee y escribe todos.
+    // Usuarios: cada uno lee su propio perfil; admin y coordinación leen todos; solo el admin escribe.
     match /usuarios/{uid} {
-      allow read: if isAdmin() || (signedIn() && email() == uid);
+      allow read: if esGestion() || (signedIn() && email() == uid);
       allow write: if isAdmin();
     }
 
@@ -27,6 +28,24 @@ service cloud.firestore {
     match /materias/{id} {
       allow read: if isAdmin() || activo();
       allow write: if isAdmin();
+    }
+
+    // Calendario académico: lo leen todos los habilitados; solo el admin lo edita.
+    match /calendario/{id} {
+      allow read: if isAdmin() || activo();
+      allow write: if isAdmin();
+    }
+
+    // Programas: el docente crea/actualiza los suyos (siempre quedan "cargado");
+    // admin y coordinación leen todos y aprueban/devuelven.
+    match /programas/{id} {
+      allow read: if esGestion() || (activo() && resource.data.docenteEmail == email());
+      allow create, update: if (activo()
+          && request.resource.data.docenteEmail == email()
+          && request.resource.data.estado == 'cargado'
+          && (resource == null || resource.data.docenteEmail == email()))
+        || esGestion();
+      allow delete: if isAdmin();
     }
 
     // Todo lo demás, cerrado.
