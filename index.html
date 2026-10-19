@@ -120,9 +120,8 @@ const TIPOS = {
   otro: ["Otro", "#4b5b6b"],
 };
 const TABS = {
-  admin: [["cumplimiento","Cumplimiento"],["calendario","Calendario"],["docentes","Docentes"],["sedes","Sedes"],["materias","Materias"]],
-  coordinador: [["cumplimiento","Cumplimiento"],["calendario","Calendario"]],
-  docente: [["mis","Mis materias"],["calendario","Calendario"]],
+  admin: [["cumplimiento","Seguimiento"],["calendario","Calendario"],["docentes","Docentes"],["sedes","Sedes"],["materias","Materias"]],
+  docente: [["mis","Mis tareas"],["calendario","Calendario"]],
 };
 
 // ---------- Utilidades ----------
@@ -137,8 +136,12 @@ const fmtCorta = f => fechaObj(f).toLocaleDateString("es-AR", { day: "numeric", 
 const fmtLarga = f => fechaObj(f).toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" });
 const urlOk = u => /^https?:\/\//i.test(u || "");
 const pid = (sedeId, materiaId, email) => `${sedeId}__${materiaId}__${email}`;
-const rolDe = u => TABS[u?.rol] ? u.rol : "docente";
-const esGestion = () => rolDe(me) !== "docente";
+// Dos perfiles: Administración (admin / coordinador) y Docente.
+const rolDe = u => (u?.rol === "admin" || u?.rol === "coordinador") ? "admin" : "docente";
+const esGestion = () => rolDe(me) === "admin";
+// Vista previa: el admin puede ver la pantalla exacta de un docente (solo lectura).
+let preview = null;
+const eff = () => preview || me;
 function addMes(f, n) {
   const [y, m, d] = f.split("-").map(Number);
   const t = new Date(y, m - 1 + n, 1);
@@ -192,9 +195,9 @@ async function cargarSesion(u) {
     await signOut(auth);
     return pantallaLogin("Tu mail (" + email + ") no está habilitado. Pedile el alta a la coordinación.");
   }
-  $("#who").innerHTML = `${esc(me.nombre || email)}<br>${esc(me.rol)}`;
+  $("#who").innerHTML = `${esc(me.nombre || email)}<br>${rolDe(me)==="admin"?"Administración":"Docente"}`;
   $("#btnSalir").hidden = false;
-  tab = TABS[rolDe(me)][0][0];
+  preview = null; tab = TABS[rolDe(me)][0][0];
   await cargarDatos();
   vista();
 }
@@ -220,9 +223,16 @@ const nMat = id => materias.find(m => m.id === id)?.nombre ?? id;
 
 // ---------- Estructura general ----------
 function vista() {
-  const rol = rolDe(me);
-  const vacio = rol === "admin" && (!sedes.length || !materias.length);
+  const rol = rolDe(eff());
+  if (!TABS[rol].some(t => t[0] === tab)) tab = TABS[rol][0][0];
+  const vacio = rol === "admin" && !preview && (!sedes.length || !materias.length);
+  const docs = usuarios.filter(u => rolDe(u) === "docente" && u.activo !== false);
   app$.innerHTML = `
+    ${preview ? `<div class="msg row sp"><span>Estás viendo la pantalla de <b>${esc(preview.nombre || preview.email)}</b> (solo lectura).</span>
+      <button class="ghost small" id="salirPrev">Volver a Administración</button></div>` : ""}
+    ${esGestion() && !preview ? `<div class="row" style="margin-bottom:10px"><span class="muted">Ver como docente:</span>
+      <select id="prev"><option value="">Elegir…</option>${docs.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre||d.email)}</option>`).join("")}</select>
+      ${docs.length ? "" : `<span class="muted">(primero agregá un docente)</span>`}</div>` : ""}
     ${vacio ? `<div class="msg row sp"><span>Todavía no hay sedes o materias cargadas.</span>
       <button class="primary" id="seed">Cargar sedes y materias iniciales</button></div>` : ""}
     <nav class="tabs">
@@ -230,6 +240,8 @@ function vista() {
     </nav>
     <section id="panel"></section>`;
   if (vacio) $("#seed").onclick = cargarIniciales;
+  if ($("#prev")) $("#prev").onchange = e => { preview = usuarios.find(u => u.id === e.target.value) || null; tab = "mis"; vista(); };
+  if ($("#salirPrev")) $("#salirPrev").onclick = () => { preview = null; tab = "cumplimiento"; vista(); };
   app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vista(); });
   ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, docentes: panelDocentes,
      sedes: panelSedes, materias: panelMaterias, mis: panelMis })[tab]();
@@ -279,33 +291,48 @@ function etiqueta(k, dl) {
 const tag = (k, dl) => { const [c, t] = etiqueta(k, dl); return `<span class="tag ${c}">${esc(t)}</span>`; };
 const enlace = (u, t) => urlOk(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>` : "";
 
-// ---------- Panel docente: Mis materias ----------
+// ---------- Panel docente: Mis tareas ----------
 function panelMis() {
-  const asig = me.asignaciones || [];
+  const yo = eff();
+  const asig = yo.asignaciones || [];
   const filas = asig.map(a => {
-    const p = programas.find(x => x.id === pid(a.sedeId, a.materiaId, me.id));
+    const p = programas.find(x => x.id === pid(a.sedeId, a.materiaId, yo.id));
     const dl = vencimientoDe(a.sedeId);
     return { a, p, dl, k: claveEstado(p, dl) };
   });
-  const urgentes = filas.filter(f => f.k === "atrasado" || f.k === "devuelto").length;
+  const pend = filas.filter(f => ["atrasado","devuelto","porvencer","pendiente"].includes(f.k))
+    .sort((x, y) => ORDEN_K[x.k] - ORDEN_K[y.k]);
+  const resto = filas.filter(f => !pend.includes(f));
+  const urg = pend.filter(f => f.k === "atrasado" || f.k === "devuelto").length;
+  const h = hoy();
+  const prox = calendario.filter(e => (e.fechaFin || e.fecha) >= h &&
+    (e.sedeId === "todas" || asig.some(a => a.sedeId === e.sedeId))).slice(0, 3);
+  const btn = f => f.k === "aprobado" ? "" :
+    `<button class="${["pendiente","porvencer","atrasado","devuelto"].includes(f.k) ? "primary" : "ghost"} small" data-p="${esc(f.a.sedeId)}|${esc(f.a.materiaId)}">${f.p ? "Actualizar programa" : "Cargar programa"}</button>`;
+  const card = f => `
+    <div class="card" style="border-left:4px solid ${f.k==="atrasado"?"var(--bad)":f.k==="devuelto"||f.k==="porvencer"?"var(--warn)":"var(--borde)"}">
+      <div class="row sp">
+        <div><strong>Cargar el programa de ${esc(nMat(f.a.materiaId))}</strong><br><span class="muted">${esc(nSede(f.a.sedeId))}</span></div>
+        <div>${tag(f.k, f.dl)}</div>
+      </div>
+      ${f.k === "devuelto" && f.p?.comentario ? `<div class="msg" style="margin-top:10px"><b>Coordinación te pidió corregir:</b> ${esc(f.p.comentario)}</div>` : ""}
+      <div class="row" style="margin-top:10px">${btn(f)} ${f.p?.link ? enlace(f.p.link, "Ver lo cargado") : ""}</div>
+    </div>`;
   $("#panel").innerHTML = `
-    <h2 style="margin-top:4px">Hola, ${esc((me.nombre||"").split(" ")[0] || "docente")}</h2>
-    ${urgentes ? `<div class="msg bad">Tenés ${urgentes} programa${urgentes>1?"s":""} para atender (atrasado o devuelto).</div>` : ""}
-    ${filas.length ? filas.map(({a,p,dl,k}) => `
-      <div class="card">
-        <div class="row sp">
-          <div><strong>${esc(nMat(a.materiaId))}</strong><br><span class="muted">${esc(nSede(a.sedeId))}</span></div>
-          <div>${tag(k, dl)}</div>
-        </div>
-        ${k === "devuelto" && p?.comentario ? `<div class="msg" style="margin-top:10px"><b>Comentario de coordinación:</b> ${esc(p.comentario)}</div>` : ""}
-        <div class="row" style="margin-top:10px">
-          ${p?.link ? enlace(p.link, "Ver programa cargado") : ""}
-          ${k === "aprobado" ? `<span class="muted">Programa aprobado ✓</span>`
-            : `<button class="ghost small" data-p="${esc(a.sedeId)}|${esc(a.materiaId)}">${p ? "Actualizar programa" : "Cargar programa"}</button>`}
-        </div>
-      </div>`).join("")
-    : `<div class="card"><div class="empty">Todavía no tenés materias asignadas.</div></div>`}`;
+    <h2 style="margin:4px 0 10px">Hola, ${esc((yo.nombre||"").split(" ")[0] || "docente")}</h2>
+    ${pend.length ? `<div class="msg ${urg ? "bad" : ""}"><b>Tenés ${pend.length} tarea${pend.length>1?"s":""} pendiente${pend.length>1?"s":""}</b>${urg ? ` · ${urg} urgente${urg>1?"s":""}` : ""}</div>`
+      : filas.length ? `<div class="msg" style="background:#1e8e4e22">Estás al día, no tenés tareas pendientes. ✓</div>` : ""}
+    ${pend.map(card).join("")}
+    ${resto.length ? `<h3 style="margin:18px 0 8px">Al día</h3>${resto.map(f => `
+      <div class="card"><div class="row sp">
+        <div><strong>${esc(nMat(f.a.materiaId))}</strong><br><span class="muted">${esc(nSede(f.a.sedeId))}</span></div>
+        <div>${tag(f.k, f.dl)} ${f.p?.link ? enlace(f.p.link, "Ver programa") : ""}</div></div></div>`).join("")}` : ""}
+    ${!filas.length ? `<div class="card"><div class="empty">Todavía no tenés materias asignadas.</div></div>` : ""}
+    ${prox.length ? `<h3 style="margin:18px 0 8px">Próximas fechas</h3><div class="card">${prox.map(e => `
+      <div class="ev"><span class="dot" style="background:${(TIPOS[e.tipo]||TIPOS.otro)[1]}"></span>
+      <div class="fecha">${esc(fmtLarga(e.fecha))}</div><div class="cuerpo"><strong>${esc(e.titulo)}</strong><br><span class="tag off">${esc(nSede(e.sedeId))}</span></div></div>`).join("")}</div>` : ""}`;
   $("#panel").querySelectorAll("[data-p]").forEach(b => b.onclick = () => {
+    if (preview) { alert("Es una vista previa: acá no se puede cargar nada."); return; }
     const [sedeId, materiaId] = b.dataset.p.split("|");
     modalPrograma(sedeId, materiaId);
   });
@@ -396,12 +423,12 @@ function panelCumplimiento() {
 
 // ---------- Calendario académico ----------
 function panelCalendario() {
-  const admin = me.rol === "admin";
-  const misSedes = new Set((me.asignaciones || []).map(a => a.sedeId));
+  const admin = rolDe(eff()) === "admin";
+  const misSedes = new Set((eff().asignaciones || []).map(a => a.sedeId));
   const h = hoy();
   let ev = calendario.filter(e =>
     (!fcal.sede || e.sedeId === fcal.sede || e.sedeId === "todas") && (!fcal.tipo || e.tipo === fcal.tipo));
-  if (me.rol === "docente" && !fcal.sede && misSedes.size) ev = ev.filter(e => e.sedeId === "todas" || misSedes.has(e.sedeId));
+  if (!admin && !fcal.sede && misSedes.size) ev = ev.filter(e => e.sedeId === "todas" || misSedes.has(e.sedeId));
   if (!fcal.pasados) ev = ev.filter(e => (e.fechaFin || e.fecha) >= h);
   const meses = {};
   ev.forEach(e => (meses[e.fecha.slice(0,7)] ||= []).push(e));
@@ -409,7 +436,7 @@ function panelCalendario() {
     <div class="card">
       <div class="row sp">
         <div class="row">
-          <select id="cs"><option value="">${me.rol==="docente"?"Mis sedes":"Todas las sedes"}</option>${sedes.map(s=>`<option value="${s.id}" ${fcal.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+          <select id="cs"><option value="">${!admin?"Mis sedes":"Todas las sedes"}</option>${sedes.map(s=>`<option value="${s.id}" ${fcal.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
           <select id="ct"><option value="">Todos los tipos</option>${Object.entries(TIPOS).map(([k,[t]])=>`<option value="${k}" ${fcal.tipo===k?"selected":""}>${esc(t)}</option>`).join("")}</select>
           <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="cp" ${fcal.pasados?"checked":""}> Ver pasados</label>
         </div>
@@ -531,7 +558,7 @@ function panelDocentes() {
       ${lista.length ? `<table class="hide3"><tr><th>Persona</th><th>Rol</th><th>Materias y sedes</th><th></th></tr>
       ${lista.map(u => `<tr>
         <td><strong>${esc(u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(u.email)}</span></td>
-        <td><span class="tag ${u.activo===false?"off":""}">${esc(u.rol)}${u.activo===false?" · inactivo":""}</span></td>
+        <td><span class="tag ${u.activo===false?"off":""}">${rolDe(u)==="admin"?"Administración":"Docente"}${u.activo===false?" · inactivo":""}</span></td>
         <td>${(u.asignaciones||[]).map(a=>`<span class="tag">${esc(nMat(a.materiaId))} · ${esc(nSede(a.sedeId))}</span>`).join("") || `<span class="muted">Sin materias</span>`}</td>
         <td><button class="ghost" data-e="${esc(u.id)}">Editar</button></td></tr>`).join("")}</table>`
       : `<div class="empty">No hay personas para mostrar. Agregá la primera con “+ Agregar”.</div>`}
@@ -556,7 +583,7 @@ function modalUsuario(u) {
     <label>Nombre y apellido</label><input id="n" style="width:100%" value="${esc(u?.nombre||"")}">
     <label>Mail de Google</label><input id="e" type="email" style="width:100%" value="${esc(u?.email||"")}" ${nuevo?"":"disabled"}>
     <div class="row"><div style="flex:1"><label>Rol</label>
-      <select id="r" style="width:100%">${["docente","coordinador","admin"].map(r=>`<option ${u?.rol===r?"selected":""}>${r}</option>`).join("")}</select></div>
+      <select id="r" style="width:100%">${[["docente","Docente"],["admin","Administración"]].map(([v,t])=>`<option value="${v}" ${rolDe(u)===v&&u?"selected":""}>${t}</option>`).join("")}</select></div>
     <div style="flex:1"><label>Estado</label>
       <select id="a" style="width:100%"><option value="1">Activo</option><option value="0" ${u?.activo===false?"selected":""}>Inactivo</option></select></div></div>
     <label>Materias y sedes asignadas</label>
