@@ -105,6 +105,24 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Horario de cada cátedra: lo carga la administración; lo ven la cátedra, los lectores y Administración (contable).
+    match /horarios/{id} {
+      allow read: if isLector() || areaEs('administracion') || (sesionOk() && id == catId(ses().sedeId, ses().materiaId));
+      allow write: if isAdmin();
+    }
+
+    // Libro de temas: un documento por clase (sede__materia__fecha). Lo carga y edita el equipo docente de esa cátedra.
+    match /libros/{id} {
+      allow read: if isLector() || areaEs('administracion')
+        || (sesionOk() && resource.data.sedeId == ses().sedeId && resource.data.materiaId == ses().materiaId);
+      allow create, update: if isAdmin()
+        || (sesionOk()
+            && request.resource.data.sedeId == ses().sedeId
+            && request.resource.data.materiaId == ses().materiaId
+            && id == catId(ses().sedeId, ses().materiaId) + '__' + request.resource.data.fecha);
+      allow delete: if isAdmin();
+    }
+
     // Todo lo demás, cerrado.
     match /{document=**} {
       allow read, write: if false;

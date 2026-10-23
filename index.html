@@ -133,10 +133,10 @@ const AREAS = {
   secretaria: ["Secretaría EBNE", "lector"],
 };
 const TABS = {
-  full: [["cumplimiento","Seguimiento"],["calendario","Calendario"],["catedras","Cátedras"],["equipo","Accesos"],["sedes","Sedes"],["materias","Materias"]],
-  lector: [["cumplimiento","Seguimiento"],["calendario","Calendario"]],
+  full: [["cumplimiento","Seguimiento"],["libros","Libros de temas"],["calendario","Calendario"],["catedras","Cátedras"],["equipo","Accesos"],["sedes","Sedes"],["materias","Materias"]],
+  lector: [["cumplimiento","Seguimiento"],["libros","Libros de temas"],["calendario","Calendario"]],
   conta: [["presentismo","Presentismo docente"],["calendario","Calendario"]],
-  docente: [["mis","Mis tareas"],["calendario","Calendario"]],
+  docente: [["mis","Mis tareas"],["libro","Libro de temas"],["calendario","Calendario"]],
 };
 
 // ---------- Utilidades ----------
@@ -171,7 +171,7 @@ let area = null;        // área EBNE que ingresó con clave
 let docSes = null;      // equipo docente: { sedeId, materiaId } (entra con la clave de la cátedra)
 let preview = null;     // administración mirando la pantalla de una cátedra (solo lectura)
 let entrando = false;
-let sedes = [], materias = [], usuarios = [], calendario = [], programas = [], catedras = [], areas = [];
+let sedes = [], materias = [], usuarios = [], calendario = [], programas = [], catedras = [], areas = [], libros = [], horarios = [];
 let tab = "mis";
 let filtro = { sede: "" };
 let fcal = { sede: "", tipo: "", pasados: false };
@@ -319,18 +319,34 @@ async function cargarDatos() {
   if (docSes) {
     const p = await getDoc(doc(db, "programas", pid(docSes.sedeId, docSes.materiaId)));
     programas = p.exists() ? [{ id: p.id, ...p.data() }] : [];
+    const [lb, hr] = await Promise.all([
+      getDocs(query(collection(db, "libros"), where("sedeId", "==", docSes.sedeId), where("materiaId", "==", docSes.materiaId))),
+      getDoc(doc(db, "horarios", pid(docSes.sedeId, docSes.materiaId))),
+    ]);
+    libros = lb.docs.map(d => ({ id: d.id, ...d.data() }));
+    horarios = hr.exists() ? [{ id: hr.id, ...hr.data() }] : [];
   } else if (nv === "full") {
-    const [us, pr, ca, ar] = await Promise.all([
+    const [us, pr, ca, ar, lb, hr] = await Promise.all([
       getDocs(collection(db, "usuarios")), getDocs(collection(db, "programas")),
       getDocs(collection(db, "catedras")), getDocs(collection(db, "areas")),
+      getDocs(collection(db, "libros")), getDocs(collection(db, "horarios")),
     ]);
+    libros = lb.docs.map(d => ({ id: d.id, ...d.data() }));
+    horarios = hr.docs.map(d => ({ id: d.id, ...d.data() }));
     usuarios = us.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre||"").localeCompare(b.nombre||""));
     programas = pr.docs.map(d => ({ id: d.id, ...d.data() }));
     catedras = ca.docs.map(d => ({ id: d.id, ...d.data() }));
     areas = ar.docs.map(d => ({ id: d.id, ...d.data() }));
   } else if (nv === "lector") {
-    programas = (await getDocs(collection(db, "programas"))).docs.map(d => ({ id: d.id, ...d.data() }));
+    const [pr, lb, hr] = await Promise.all([getDocs(collection(db, "programas")), getDocs(collection(db, "libros")), getDocs(collection(db, "horarios"))]);
+    programas = pr.docs.map(d => ({ id: d.id, ...d.data() }));
+    libros = lb.docs.map(d => ({ id: d.id, ...d.data() }));
+    horarios = hr.docs.map(d => ({ id: d.id, ...d.data() }));
     catedras = [];
+  } else if (nv === "conta") {
+    const [lb, hr] = await Promise.all([getDocs(collection(db, "libros")), getDocs(collection(db, "horarios"))]);
+    libros = lb.docs.map(d => ({ id: d.id, ...d.data() }));
+    horarios = hr.docs.map(d => ({ id: d.id, ...d.data() }));
   }
 }
 const nSede = id => id === "todas" ? "Todas las sedes" : (sedes.find(s => s.id === id)?.nombre ?? id);
@@ -361,7 +377,7 @@ function vista() {
   };
   if ($("#salirPrev")) $("#salirPrev").onclick = () => { preview = null; tab = "cumplimiento"; vista(); };
   app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vista(); });
-  ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, catedras: panelCatedras, equipo: panelAccesos, presentismo: panelPresentismo,
+  ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, catedras: panelCatedras, equipo: panelAccesos, presentismo: panelPresentismo, libro: panelLibroDoc, libros: panelLibros,
      sedes: panelSedes, materias: panelMaterias, mis: panelMis })[tab]();
 }
 
@@ -432,15 +448,35 @@ function panelMis() {
       ${p?.cargadoPor ? `<div class="muted" style="margin-top:8px">Cargado por ${esc(p.cargadoPor)}</div>` : ""}
       <div class="row" style="margin-top:10px">${btn} ${p?.link ? enlace(p.link, "Ver lo cargado") : ""}</div>
     </div>`;
+  const lbe = libroEstado(cat.sedeId, cat.materiaId);
+  const tareasLibro = lbe.atrasadas.sort((a,b) => a.fecha.localeCompare(b.fecha)).map(c => `
+    <div class="card" style="border-left:4px solid var(--bad)">
+      <div class="row sp"><div><strong>Completar el libro de temas</strong><br><span class="muted">Clase del ${esc(fmtClase(c))}</span></div>
+        <span class="tag bad">No completaste el libro de temas</span></div>
+      <div class="row" style="margin-top:10px"><button class="primary small" data-lb="${esc(c.fecha)}|${esc(c.ini)}|${esc(c.fin)}">Completar ahora</button></div>
+    </div>`).join("");
+  const hoyLibro = lbe.deHoy.map(c => `
+    <div class="card"><div class="row sp"><div><strong>Clase de hoy</strong><br><span class="muted">${esc(fmtClase(c))} · cargá el libro de temas antes de las ${String(c.limite.getHours()).padStart(2,"0")}:${String(c.limite.getMinutes()).padStart(2,"0")}</span></div>
+      <span class="tag warn">Para cargar</span></div>
+      <div class="row" style="margin-top:10px"><button class="ghost small" data-lb="${esc(c.fecha)}|${esc(c.ini)}|${esc(c.fin)}">Cargar libro de temas</button></div></div>`).join("");
+  const nPend = (pendiente ? 1 : 0) + lbe.atrasadas.length;
+  const hayUrg = urgente || lbe.atrasadas.length > 0;
   $("#panel").innerHTML = `
     <h2 style="margin:4px 0 2px">${esc(nMat(cat.materiaId))}</h2>
     <div class="muted" style="margin-bottom:12px">${esc(nSede(cat.sedeId))}</div>
-    ${pendiente ? `<div class="msg ${urgente ? "bad" : ""}"><b>Tenés 1 tarea pendiente</b>${urgente ? " · urgente" : ""}</div>`
+    ${nPend ? `<div class="msg ${hayUrg ? "bad" : ""}"><b>Tenés ${nPend} tarea${nPend>1?"s":""} pendiente${nPend>1?"s":""}</b>${hayUrg ? " · urgente" : ""}</div>`
       : `<div class="msg" style="background:#1e8e4e22">Están al día, no hay tareas pendientes. ✓</div>`}
+    ${tareasLibro}${hoyLibro}
+    ${!lbe.tieneHorario ? `<div class="msg">Todavía no está cargado el horario de esta cátedra, por eso no se controla el libro de temas. Podés cargar tus clases igual desde la pestaña Libro de temas.</div>` : ""}
     ${tarea}
     ${prox.length ? `<h3 style="margin:18px 0 8px">Próximas fechas</h3><div class="card">${prox.map(e => `
       <div class="ev"><span class="dot" style="background:${(TIPOS[e.tipo]||TIPOS.otro)[1]}"></span>
       <div class="fecha">${esc(fmtLarga(e.fecha))}</div><div class="cuerpo"><strong>${esc(e.titulo)}</strong></div></div>`).join("")}</div>` : ""}`;
+  $("#panel").querySelectorAll("[data-lb]").forEach(b => b.onclick = () => {
+    if (preview) { alert("Es una vista previa: acá no se puede cargar nada."); return; }
+    const [fecha, ini, fin] = b.dataset.lb.split("|");
+    modalLibro(cat.sedeId, cat.materiaId, { fecha, ini, fin });
+  });
   if ($("#cargarProg")) $("#cargarProg").onclick = () => {
     if (preview) { alert("Es una vista previa: acá no se puede cargar nada."); return; }
     modalPrograma(cat.sedeId, cat.materiaId);
@@ -484,16 +520,18 @@ function panelCumplimiento() {
     const p = programas.find(x => x.id === pid(c.sedeId, c.materiaId));
     const dl = vencimientoDe(c.sedeId);
     const ct = catedras.find(x => x.id === pid(c.sedeId, c.materiaId));
-    return { c, p, dl, ct, k: claveEstado(p, dl) };
+    return { c, p, dl, ct, lb: libroEstado(c.sedeId, c.materiaId), k: claveEstado(p, dl) };
   });
   const base = todas.filter(r => !fcum.sede || r.c.sedeId === fcum.sede);
   const vis = base.filter(r => !fcum.estado || r.k === fcum.estado)
     .sort((x, y) => ORDEN_K[x.k] - ORDEN_K[y.k] || nMat(x.c.materiaId).localeCompare(nMat(y.c.materiaId)));
   const chips = [["atrasado","Atrasados"],["devuelto","Devueltos"],["porvencer","Por vencer"],["cargado","Para revisar"],["pendiente","Pendientes"],["aprobado","Aprobados"]];
   const sinFecha = sedes.some(s => s.activa !== false && !vencimientoDe(s.id));
+  const nLibAtr = base.filter(r => r.lb.atrasadas.length).length;
   const sinClave = canEdit() ? todas.filter(r => !r.ct?.clave).length : 0;
   $("#panel").innerHTML = `
     ${sinFecha ? `<div class="msg">Falta cargar en el Calendario el <b>vencimiento de programa</b> de alguna sede. Sin esa fecha no se puede calcular el atraso.</div>` : ""}
+    ${nLibAtr ? `<div class="msg bad"><b>${nLibAtr}</b> cátedras tienen libros de temas sin cargar.</div>` : ""}
     ${sinClave ? `<div class="msg">Hay <b>${sinClave}</b> cátedras sin clave de ingreso. Generalas en la pestaña <b>Cátedras</b>.</div>` : ""}
     <div class="chips">
       ${chips.map(([k,t]) => `<button class="chip ${fcum.estado===k?"on":""}" data-k="${k}"><b>${base.filter(r=>r.k===k).length}</b><span>${t}</span></button>`).join("")}
@@ -504,10 +542,11 @@ function panelCumplimiento() {
       <span class="muted">${vis.length} de ${base.length} cátedras</span>
     </div></div>
     <div class="card">
-      ${vis.length ? `<table><tr><th>Cátedra</th><th>Programa</th><th></th></tr>
+      ${vis.length ? `<table><tr><th>Cátedra</th><th>Programa</th><th>Libro de temas</th><th></th></tr>
       ${vis.map(r => `<tr>
         <td><strong>${esc(nMat(r.c.materiaId))}</strong><br><span class="muted">${esc(nSede(r.c.sedeId))}</span></td>
         <td>${tag(r.k, r.dl)}${r.p?.cargadoPor ? `<br><span class="muted">Cargó ${esc(r.p.cargadoPor)}</span>` : ""}${r.p?.comentario && r.k==="devuelto" ? `<br><span class="muted">${esc(r.p.comentario)}</span>`:""}</td>
+        <td>${lbTag(r.lb)}</td>
         <td>${r.p ? `${enlace(r.p.link,"Ver")}
           ${canEdit() && r.p.estado !== "aprobado" ? `<button class="ghost small" data-ap="${esc(r.p.id)}">Aprobar</button>` : ""}
           ${canEdit() && r.p.estado !== "devuelto" ? `<button class="ghost small danger" data-dv="${esc(r.p.id)}">Devolver</button>` : ""}` : ""}</td>
@@ -644,6 +683,186 @@ function descargarIcs(lista) {
   a.download = "calendario-ebne.ics"; document.body.appendChild(a); a.click(); a.remove();
 }
 
+// ---------- Libro de temas: clases esperadas, atrasos y carga ----------
+const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const HORAS_LIMITE = 2;   // horas después de terminar la clase para completar el libro
+const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const idLibro = (sedeId, materiaId, fecha) => `${pid(sedeId, materiaId)}__${fecha}`;
+const hrDe = (sedeId, materiaId) => horarios.find(x => x.id === pid(sedeId, materiaId));
+const horarioTxt = h => (h?.dias || []).map(d => `${DIAS[d.dow].slice(0,3)} ${d.ini}-${d.fin}`).join(" · ");
+function esFeriado(sedeId, f) {
+  return calendario.some(e => e.tipo === "feriado" && (e.sedeId === "todas" || e.sedeId === sedeId) && e.fecha <= f && (e.fechaFin || e.fecha) >= f);
+}
+// Clases que deberían haberse dado hasta hoy (según horario, inicio/cierre de cuatrimestre y feriados).
+function clasesEsperadas(sedeId, materiaId) {
+  const h = hrDe(sedeId, materiaId);
+  if (!h?.dias?.length) return [];
+  const t = hoy();
+  const delSede = e => e.sedeId === "todas" || e.sedeId === sedeId;
+  const ini = calendario.filter(e => e.tipo === "inicio_cuatrimestre" && e.fecha <= t && delSede(e)).sort((a,b) => b.fecha.localeCompare(a.fecha))[0];
+  if (!ini) return [];
+  const cie = calendario.filter(e => e.tipo === "cierre_cuatrimestre" && e.fecha >= ini.fecha && delSede(e)).sort((a,b) => a.fecha.localeCompare(b.fecha))[0];
+  const out = [];
+  for (const d = fechaObj(ini.fecha); ymd(d) <= t; d.setDate(d.getDate() + 1)) {
+    const f = ymd(d);
+    if (cie && f > (cie.fechaFin || cie.fecha)) break;
+    if (esFeriado(sedeId, f)) continue;
+    for (const s of h.dias) if (+s.dow === d.getDay()) {
+      const [hh, mm] = s.fin.split(":").map(Number);
+      out.push({ fecha: f, ini: s.ini, fin: s.fin, limite: new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh + HORAS_LIMITE, mm) });
+    }
+  }
+  return out;
+}
+function libroEstado(sedeId, materiaId) {
+  const esp = clasesEsperadas(sedeId, materiaId);
+  const cargados = new Set(libros.filter(l => l.sedeId === sedeId && l.materiaId === materiaId).map(l => l.fecha));
+  const now = new Date();
+  return {
+    tieneHorario: !!hrDe(sedeId, materiaId)?.dias?.length,
+    esp,
+    atrasadas: esp.filter(c => c.limite < now && !cargados.has(c.fecha)),
+    deHoy: esp.filter(c => c.fecha === hoy() && c.limite >= now && !cargados.has(c.fecha)),
+  };
+}
+const lbTag = lb => !lb.tieneHorario ? `<span class="tag pend">Sin horario</span>`
+  : lb.atrasadas.length ? `<span class="tag bad">${lb.atrasadas.length} sin cargar</span>` : `<span class="tag ok">Al día</span>`;
+const fmtClase = c => `${fmtLarga(c.fecha)} · ${c.ini}–${c.fin}`;
+
+// Formulario del libro de temas (lo carga el equipo docente).
+function modalLibro(sedeId, materiaId, pre = {}) {
+  const ex = libros.find(l => l.id === idLibro(sedeId, materiaId, pre.fecha));
+  const v = ex || pre;
+  const bg = abrirModal(`
+    <h3>Libro de temas</h3>
+    <div class="muted">${esc(nMat(materiaId))} · ${esc(nSede(sedeId))}</div>
+    <div class="row"><div style="flex:1"><label>Fecha de la clase</label><input id="f" type="date" style="width:100%" value="${esc(v.fecha||hoy())}" ${ex?"disabled":""}></div>
+    <div style="flex:1"><label>Quién dictó la clase</label><input id="q" style="width:100%" value="${esc(v.cargadoPor||"")}" placeholder="Nombre"></div></div>
+    <div class="row"><div style="flex:1"><label>Hora de inicio</label><input id="hi" type="time" style="width:100%" value="${esc(v.horaInicio||v.ini||"")}"></div>
+    <div style="flex:1"><label>Hora de fin</label><input id="hf" type="time" style="width:100%" value="${esc(v.horaFin||v.fin||"")}"></div></div>
+    <label>Tema de la clase (libro de clase)</label>
+    <textarea id="t" rows="3" placeholder="Contenidos desarrollados en esta clase">${esc(v.tema||"")}</textarea>
+    <label>Observaciones a destacar sobre la clase</label>
+    <textarea id="oc" rows="2">${esc(v.obsClase||"")}</textarea>
+    <label>Observaciones sobre los estudiantes</label>
+    <textarea id="oe" rows="2">${esc(v.obsEstudiantes||"")}</textarea>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--txt);margin-top:12px"><input type="checkbox" id="ri" ${v.riesgo?"checked":""}> Hay estudiantes en riesgo de dejar (avisar a gestión)</label>
+    <textarea id="rt" rows="2" placeholder="Quiénes y por qué (faltas, bajo rendimiento, problemas personales…)" ${v.riesgo?"":"hidden"}>${esc(v.riesgoTexto||"")}</textarea>
+    <label>Incidencias (pileta, clima, materiales, seguridad, accidentes)</label>
+    <textarea id="inc" rows="2">${esc(v.incidencias||"")}</textarea>
+    <label>Para la próxima clase (tarea, materiales, tema pendiente)</label>
+    <textarea id="px" rows="2">${esc(v.proxima||"")}</textarea>
+    <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
+    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
+  $("#ri", bg).onchange = e => { $("#rt", bg).hidden = !e.target.checked; };
+  $("#cancel", bg).onclick = () => bg.remove();
+  $("#ok", bg).onclick = async () => {
+    const fecha = $("#f", bg).value, quien = $("#q", bg).value.trim(), tema = $("#t", bg).value.trim(), err = $("#err", bg);
+    if (!fecha || !quien || !tema) { err.hidden = false; err.textContent = "Completá la fecha, quién dictó y el tema de la clase."; return; }
+    if (fecha > hoy()) { err.hidden = false; err.textContent = "La fecha no puede ser futura."; return; }
+    $("#ok", bg).disabled = true;
+    try {
+      await setDoc(doc(db, "libros", idLibro(sedeId, materiaId, fecha)), {
+        sedeId, materiaId, fecha, cargadoPor: quien, horaInicio: $("#hi", bg).value, horaFin: $("#hf", bg).value,
+        tema, obsClase: $("#oc", bg).value.trim(), obsEstudiantes: $("#oe", bg).value.trim(),
+        riesgo: $("#ri", bg).checked, riesgoTexto: $("#ri", bg).checked ? $("#rt", bg).value.trim() : "",
+        incidencias: $("#inc", bg).value.trim(), proxima: $("#px", bg).value.trim(),
+        actualizado: new Date().toISOString(),
+      }, { merge: true });
+      bg.remove(); await cargarDatos(); vista();
+    } catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
+  };
+}
+function verLibro(l) {
+  const f = (t, x) => x ? `<p style="margin:8px 0 0"><b>${t}</b><br>${esc(x).replace(/\n/g,"<br>")}</p>` : "";
+  const bg = abrirModal(`<h3>${esc(nMat(l.materiaId))} · ${esc(nSede(l.sedeId))}</h3>
+    <div class="muted">${esc(fmtLarga(l.fecha))} · ${esc(l.horaInicio||"?")}–${esc(l.horaFin||"?")} · dictó ${esc(l.cargadoPor||"?")}</div>
+    ${f("Tema", l.tema)}${f("Observaciones de la clase", l.obsClase)}${f("Observaciones sobre los estudiantes", l.obsEstudiantes)}
+    ${l.riesgo ? `<p style="margin:8px 0 0"><span class="tag bad">Estudiantes en riesgo</span><br>${esc(l.riesgoTexto||"")}</p>` : ""}
+    ${f("Incidencias", l.incidencias)}${f("Para la próxima clase", l.proxima)}
+    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="ghost" id="cerrar">Cerrar</button></div>`);
+  $("#cerrar", bg).onclick = () => bg.remove();
+}
+
+// Portal docente: pestaña "Libro de temas"
+function panelLibroDoc() {
+  const cat = catActual();
+  const lb = libroEstado(cat.sedeId, cat.materiaId);
+  const mios = libros.filter(l => l.sedeId === cat.sedeId && l.materiaId === cat.materiaId).sort((a,b) => b.fecha.localeCompare(a.fecha));
+  $("#panel").innerHTML = `
+    <div class="row sp" style="margin-bottom:10px"><div><h2 style="margin:0">Libro de temas</h2><span class="muted">${esc(nMat(cat.materiaId))} · ${esc(nSede(cat.sedeId))}</span></div>
+      <button class="primary" id="nueva">+ Cargar clase</button></div>
+    ${lb.atrasadas.length ? `<div class="msg bad"><b>No completaste el libro de temas</b> de ${lb.atrasadas.length} clase${lb.atrasadas.length>1?"s":""}. Están en Mis tareas.</div>` : ""}
+    <div class="card">${mios.length ? `<table><tr><th>Clase</th><th>Tema</th><th></th></tr>
+      ${mios.map(l => `<tr><td>${esc(fmtLarga(l.fecha))}<br><span class="muted">${esc(l.cargadoPor||"")}</span></td>
+        <td>${esc((l.tema||"").slice(0,120))}${l.riesgo ? ` <span class="tag bad">Riesgo</span>` : ""}</td>
+        <td><button class="ghost small" data-e="${esc(l.fecha)}">Editar</button></td></tr>`).join("")}</table>`
+      : `<div class="empty">Todavía no cargaste ninguna clase.</div>`}</div>`;
+  $("#nueva").onclick = () => { if (preview) return alert("Es una vista previa: acá no se puede cargar nada."); modalLibro(cat.sedeId, cat.materiaId, {}); };
+  $("#panel").querySelectorAll("[data-e]").forEach(b => b.onclick = () => {
+    if (preview) return alert("Es una vista previa: acá no se puede cargar nada.");
+    modalLibro(cat.sedeId, cat.materiaId, { fecha: b.dataset.e });
+  });
+}
+
+// Gestión: pestaña "Libros de temas"
+let flib = { sede: "", materia: "", riesgo: false };
+function panelLibros() {
+  const lista = libros.filter(l => (!flib.sede || l.sedeId === flib.sede) && (!flib.materia || l.materiaId === flib.materia) && (!flib.riesgo || l.riesgo))
+    .sort((a,b) => b.fecha.localeCompare(a.fecha)).slice(0, 150);
+  const nRiesgo = libros.filter(l => l.riesgo).length;
+  $("#panel").innerHTML = `
+    <div class="card"><div class="row">
+      <select id="fs"><option value="">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${flib.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+      <select id="fm"><option value="">Todas las materias</option>${materias.map(m=>`<option value="${m.id}" ${flib.materia===m.id?"selected":""}>${esc(m.nombre)}</option>`).join("")}</select>
+      <label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--txt)"><input type="checkbox" id="fr" ${flib.riesgo?"checked":""}> Solo con estudiantes en riesgo (${nRiesgo})</label>
+    </div></div>
+    <div class="card">${lista.length ? `<table class="hide3"><tr><th>Clase</th><th>Cátedra</th><th>Tema</th><th></th></tr>
+      ${lista.map(l => `<tr><td>${esc(fmtLarga(l.fecha))}<br><span class="muted">${esc(l.cargadoPor||"")}</span></td>
+        <td><strong>${esc(nMat(l.materiaId))}</strong><br><span class="muted">${esc(nSede(l.sedeId))}</span></td>
+        <td>${esc((l.tema||"").slice(0,90))}${l.riesgo ? ` <span class="tag bad">Riesgo</span>` : ""}</td>
+        <td><button class="ghost small" data-v="${esc(l.id)}">Ver</button></td></tr>`).join("")}</table>`
+      : `<div class="empty">Todavía no hay clases cargadas.</div>`}</div>`;
+  $("#fs").onchange = e => { flib.sede = e.target.value; panelLibros(); };
+  $("#fm").onchange = e => { flib.materia = e.target.value; panelLibros(); };
+  $("#fr").onchange = e => { flib.riesgo = e.target.checked; panelLibros(); };
+  $("#panel").querySelectorAll("[data-v]").forEach(b => b.onclick = () => verLibro(libros.find(l => l.id === b.dataset.v)));
+}
+
+// Administración (contable): presentismo de los profes
+let fpre = { sede: "", dias: 30 };
+function panelPresentismo() {
+  const desde = (() => { const d = new Date(); d.setDate(d.getDate() - fpre.dias); return ymd(d); })();
+  const filas = [];
+  for (const c of combosActivos()) {
+    if (fpre.sede && c.sedeId !== fpre.sede) continue;
+    const mios = libros.filter(l => l.sedeId === c.sedeId && l.materiaId === c.materiaId);
+    for (const e of clasesEsperadas(c.sedeId, c.materiaId)) {
+      if (e.fecha < desde) continue;
+      const l = mios.find(x => x.fecha === e.fecha);
+      filas.push({ c, e, l, vencida: e.limite < new Date() });
+    }
+  }
+  filas.sort((a, b) => b.e.fecha.localeCompare(a.e.fecha) || nMat(a.c.materiaId).localeCompare(nMat(b.c.materiaId)));
+  const sinReg = filas.filter(f => !f.l && f.vencida).length;
+  const sinHorario = combosActivos().filter(c => !hrDe(c.sedeId, c.materiaId)?.dias?.length).length;
+  $("#panel").innerHTML = `
+    ${sinHorario ? `<div class="msg">${sinHorario} cátedras no tienen horario cargado, así que no aparecen acá.</div>` : ""}
+    <div class="card"><div class="row sp"><div class="row">
+      <select id="fs"><option value="">Todas las sedes</option>${sedes.map(s=>`<option value="${s.id}" ${fpre.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+      <select id="fd">${[[7,"Últimos 7 días"],[30,"Últimos 30 días"],[90,"Últimos 90 días"]].map(([n,t])=>`<option value="${n}" ${fpre.dias===n?"selected":""}>${t}</option>`).join("")}</select></div>
+      <span class="muted">${filas.length} clases · <b>${sinReg}</b> sin registro</span></div></div>
+    <div class="card">${filas.length ? `<table class="hide3"><tr><th>Clase</th><th>Cátedra</th><th>Presentismo</th><th>Observaciones</th></tr>
+      ${filas.map(f => `<tr><td>${esc(fmtLarga(f.e.fecha))}<br><span class="muted">${f.e.ini}–${f.e.fin}</span></td>
+        <td><strong>${esc(nMat(f.c.materiaId))}</strong><br><span class="muted">${esc(nSede(f.c.sedeId))}</span></td>
+        <td>${f.l ? `<span class="tag ok">Presente</span><br><span class="muted">${esc(f.l.cargadoPor||"")} · ${esc(f.l.horaInicio||"?")}–${esc(f.l.horaFin||"?")}</span>`
+          : f.vencida ? `<span class="tag bad">Sin registro</span>` : `<span class="tag pend">Pendiente</span>`}</td>
+        <td>${f.l ? esc((f.l.obsClase||"").slice(0,120)) + (f.l.incidencias ? `<br><span class="tag warn">Incidencia</span> ${esc(f.l.incidencias.slice(0,80))}` : "") : ""}</td></tr>`).join("")}</table>`
+      : `<div class="empty">No hay clases esperadas en el período. Se calculan con el horario de cada cátedra y el inicio de cuatrimestre del calendario.</div>`}</div>`;
+  $("#fs").onchange = e => { fpre.sede = e.target.value; panelPresentismo(); };
+  $("#fd").onchange = e => { fpre.dias = +e.target.value; panelPresentismo(); };
+}
+
 // ---------- Gestión: Cátedras (claves y mails de aviso) ----------
 function panelCatedras() {
   const combos = combosActivos().filter(c => !filtro.sede || c.sedeId === filtro.sede);
@@ -661,11 +880,12 @@ function panelCatedras() {
       <p class="muted" style="margin:10px 0 0">Cada cátedra (materia en una sede) tiene una clave. El profe y los ayudantes ingresan eligiendo sede, materia y esa clave. Los mails son a donde llegan los avisos.</p>
     </div>
     <div class="card">
-      <table class="hide3"><tr><th>Cátedra</th><th>Clave</th><th>Mails de aviso</th><th></th></tr>
+      <table class="hide3"><tr><th>Cátedra</th><th>Clave</th><th>Mails y horario</th><th></th></tr>
       ${combos.map(c => { const x = ct(c); return `<tr>
         <td><strong>${esc(nMat(c.materiaId))}</strong><br><span class="muted">${esc(nSede(c.sedeId))}</span></td>
         <td>${x?.clave ? `<code>${esc(x.clave)}</code>` : `<span class="tag warn">Sin clave</span>`}</td>
-        <td>${(x?.mails||[]).map(m => `<span class="tag">${esc(m)}</span>`).join("") || `<span class="muted">Sin mails</span>`}${x?.nombres ? `<br><span class="muted">${esc(x.nombres)}</span>` : ""}</td>
+        <td>${(x?.mails||[]).map(m => `<span class="tag">${esc(m)}</span>`).join("") || `<span class="muted">Sin mails</span>`}${x?.nombres ? `<br><span class="muted">${esc(x.nombres)}</span>` : ""}
+          <br>${hrDe(c.sedeId, c.materiaId)?.dias?.length ? `<span class="muted">🕒 ${esc(horarioTxt(hrDe(c.sedeId, c.materiaId)))}</span>` : `<span class="tag warn">Sin horario</span>`}</td>
         <td><button class="ghost small" data-c="${esc(pid(c.sedeId, c.materiaId))}">Editar</button></td></tr>`; }).join("")}
       </table>
     </div>`;
@@ -682,6 +902,8 @@ function panelCatedras() {
   });
 }
 
+const filaHr = d => `<div class="asig hr"><select class="hd">${DIAS.map((n,i)=>`<option value="${i}" ${+d.dow===i?"selected":""}>${n}</option>`).join("")}</select>
+  <input class="hi" type="time" value="${esc(d.ini||"")}"><input class="hf" type="time" value="${esc(d.fin||"")}"><button class="ghost danger" type="button" data-x>✕</button></div>`;
 function modalCatedra(sedeId, materiaId) {
   const id = pid(sedeId, materiaId);
   const x = catedras.find(c => c.id === id);
@@ -692,10 +914,16 @@ function modalCatedra(sedeId, materiaId) {
     <p class="muted" style="margin:6px 0 0">Si la cambiás, quienes la tienen deberán ingresar de nuevo con la clave nueva.</p>
     <label>Mails de aviso (separados por coma)</label>
     <textarea id="m" rows="2" placeholder="profe@gmail.com, ayudante@gmail.com">${esc((x?.mails||[]).join(", "))}</textarea>
+    <label>Horario de clases (el libro de temas se controla con esto)</label>
+    <div id="hrs">${(hrDe(sedeId, materiaId)?.dias || []).map(filaHr).join("")}</div>
+    <button class="ghost small" type="button" id="mashr">+ Agregar día</button>
     <label>Quiénes son (opcional, solo para vos)</label>
     <input id="nn" style="width:100%" value="${esc(x?.nombres||"")}" placeholder="Ej.: Prof. Pérez, ayudante Gómez">
     <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
     <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
+  const bindHr = () => bg.querySelectorAll("[data-x]").forEach(b => b.onclick = () => b.parentElement.remove());
+  bindHr();
+  $("#mashr", bg).onclick = () => { $("#hrs", bg).insertAdjacentHTML("beforeend", filaHr({ dow: 1, ini: "19:00", fin: "22:00" })); bindHr(); };
   $("#g", bg).onclick = () => { $("#k", bg).value = nuevaClave(); };
   $("#cancel", bg).onclick = () => bg.remove();
   $("#ok", bg).onclick = async () => {
@@ -703,8 +931,11 @@ function modalCatedra(sedeId, materiaId) {
     const mails = $("#m", bg).value.split(/[,;\s]+/).map(m => m.trim().toLowerCase()).filter(Boolean);
     if (clave.length < 4) { err.hidden = false; err.textContent = "La clave debe tener al menos 4 caracteres."; return; }
     if (mails.some(m => !mailOk(m))) { err.hidden = false; err.textContent = "Revisá los mails: hay alguno con formato inválido."; return; }
+    const dias = [...bg.querySelectorAll(".hr")].map(r => ({ dow: +$(".hd", r).value, ini: $(".hi", r).value, fin: $(".hf", r).value }));
+    if (dias.some(d => !d.ini || !d.fin || d.fin <= d.ini)) { err.hidden = false; err.textContent = "Revisá el horario: cada día necesita hora de inicio y una hora de fin posterior."; return; }
     $("#ok", bg).disabled = true;
     try {
+      await setDoc(doc(db, "horarios", id), { sedeId, materiaId, dias });
       await setDoc(doc(db, "catedras", id), { sedeId, materiaId, clave, mails, nombres: $("#nn", bg).value.trim() }, { merge: true });
       bg.remove(); await cargarDatos(); panelCatedras();
     } catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code||e.message); $("#ok", bg).disabled = false; }
@@ -743,12 +974,6 @@ function panelAccesos() {
   });
 }
 
-// ---------- Administración: presentismo docente ----------
-function panelPresentismo() {
-  $("#panel").innerHTML = `<div class="card"><div class="empty">
-    Acá va a verse el presentismo de los profes: quién estuvo presente y las observaciones de cada clase.<br>
-    Todavía no hay datos: se carga con el libro de temas, que es la próxima etapa.</div></div>`;
-}
 
 function modalUsuario(u) {
   const nuevo = !u;
