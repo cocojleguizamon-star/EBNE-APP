@@ -1009,20 +1009,23 @@ function modalUsuario(u) {
 
 // ---------- Sedes y materias (admin) ----------
 // ---------- Testeos unificados (solo materias prácticas) ----------
+// Estructura tomada de "EBNE 2026 - Testeos.xlsx": cada testeo tiene una o más marcas por estudiante
+// (tiempos m:ss o repeticiones) y se compara con el testeo anterior de la misma prueba.
 const AREA_PRACTICA = "Prácticas y condición física";
+const C = (k, n, tipo = "t", std = null) => ({ k, n, tipo, std });
 const TESTEOS_PLAN = {
   "natacion": [
-    { id: "n1", nombre: "1er testeo · Diagnóstico de ingreso", prueba: "200 m crol + 100 m pecho", cuando: "Ingreso", serie: "a" },
-    { id: "n2", nombre: "2do testeo · Comparativo", prueba: "200 m crol + 100 m pecho", cuando: "Semana de mayo", serie: "a" },
-    { id: "n3", nombre: "3er testeo", prueba: "300 m crol + 100 m libres (velocidad)", cuando: "1ª semana de agosto", serie: "b" },
-    { id: "n4", nombre: "4to testeo", prueba: "300 m crol + 100 m libres (velocidad)", cuando: "Fines de noviembre, antes de Mar del Plata", serie: "b" },
-    { id: "n5", nombre: "Testeo final", prueba: "200 m crol en 3'45\" y 100 m pecho en 2'", cuando: "1ª semana de marzo (fin del curso)", serie: "c" },
+    { id: "n1", nombre: "Testeo 1 · Ingreso", prueba: "200 m crol + 100 m pecho", cuando: "Marzo", serie: "a", campos: [C("c200", "200 crol", "t", 225), C("p100", "100 pecho", "t", 120)] },
+    { id: "n2", nombre: "Testeo 2 · Comparativo", prueba: "200 m crol + 100 m pecho", cuando: "Semana de mayo", serie: "a", campos: [C("c200", "200 crol", "t", 225), C("p100", "100 pecho", "t", 120)] },
+    { id: "n3", nombre: "Testeo 3", prueba: "300 m crol + 100 m velocidad", cuando: "1ª semana de agosto", serie: "b", campos: [C("c300", "300 crol"), C("v100", "100 vel.")] },
+    { id: "n4", nombre: "Testeo 4", prueba: "300 m crol + 100 m velocidad", cuando: "Noviembre, antes de Mar del Plata", serie: "b", campos: [C("c300", "300 crol"), C("v100", "100 vel.")] },
   ],
   "preparacion-fisica": [
-    { id: "p1", nombre: "1er testeo", prueba: "1000 m", cuando: "2ª quincena de mayo", serie: "m1000" },
-    { id: "p2", nombre: "2do testeo", prueba: "400 m", cuando: "1ª quincena de julio, antes del receso invernal", serie: "m400" },
-    { id: "p3", nombre: "3er testeo", prueba: "1000 m", cuando: "2ª quincena de octubre", serie: "m1000" },
-    { id: "p4", nombre: "4to testeo", prueba: "400 m", cuando: "Última semana de noviembre, antes de Mar del Plata", serie: "m400" },
+    { id: "p1", nombre: "Física 1", prueba: "1000 m", cuando: "2ª quincena de mayo", serie: "m1000", campos: [C("t", "1000 m")] },
+    { id: "p2", nombre: "Física 2", prueba: "400 m", cuando: "1ª quincena de julio, antes del receso", serie: "m400", campos: [C("t", "400 m")] },
+    { id: "p3", nombre: "Física 3", prueba: "1000 m", cuando: "2ª quincena de octubre", serie: "m1000", campos: [C("t", "1000 m")] },
+    { id: "p4", nombre: "Física 4", prueba: "400 m", cuando: "Última semana de noviembre, antes de Mar del Plata", serie: "m400", campos: [C("t", "400 m")] },
+    { id: "pc", nombre: "Complemento", prueba: "Sentadillas y flexiones", cuando: "Mayo", serie: "comp", campos: [C("sent", "Sentadillas", "r"), C("flex", "Flexiones", "r")] },
   ],
 };
 const MAT_NOMBRE_PLAN = { "natacion": "Natación", "preparacion-fisica": "Preparación Física" };
@@ -1042,52 +1045,76 @@ const fmtT = s => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.round(s % 60);
   return h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`;
 };
+const valor = (c, v) => v == null ? "–" : c.tipo === "t" ? fmtT(v) : String(v);
 const kAl = f => `${f.ap}|${f.no}`.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-function parseFilas(txt) {
+const leerVal = (c, x) => {
+  x = String(x ?? "").trim();
+  if (!x || x === "-") return null;
+  if (c.tipo === "t") return segs(x);
+  const n = Number(x.replace(",", ".")); return Number.isFinite(n) && n >= 0 ? n : NaN;
+};
+function parseFilas(txt, campos) {
   const filas = [], errores = [];
+  const esperadas = 3 + campos.length;
   txt.split("\n").forEach((raw, i) => {
     const l = raw.trim(); if (!l) return;
     let p = l.split(/\t|;/); if (p.length === 1) p = l.split(",");
     p = p.map(x => x.trim());
-    let ap, no, co = "", t;
-    if (p.length >= 4) [ap, no, co, t] = p; else if (p.length === 3) [ap, no, t] = p; else { errores.push(`Línea ${i + 1}: faltan datos`); return; }
-    const s = segs(t);
-    if (!ap || Number.isNaN(s)) { errores.push(`Línea ${i + 1}: revisá el apellido o el tiempo (formato m:ss)`); return; }
-    filas.push({ ap, no, co, t: s });
+    if (p.length < esperadas) p = p.concat(Array(esperadas - p.length).fill(""));
+    const [ap, no, co] = p, v = {};
+    let mal = !ap;
+    campos.forEach((c, j) => { const x = leerVal(c, p[3 + j]); if (Number.isNaN(x)) mal = true; v[c.k] = x; });
+    if (mal) { errores.push(`Línea ${i + 1}: revisá el apellido o los valores`); return; }
+    filas.push({ ap, no, co, v });
   });
   return { filas, errores };
 }
-const filasATexto = fs => (fs || []).map(f => `${f.ap}; ${f.no}; ${f.co || ""}; ${f.t == null ? "" : fmtT(f.t)}`).join("\n");
+const filasATexto = (fs, campos) => (fs || []).map(f => [f.ap, f.no, f.co || "", ...campos.map(c => f.v?.[c.k] == null ? "" : (c.tipo === "t" ? fmtT(f.v[c.k]) : f.v[c.k]))].join("; ")).join("\n");
 const testDe = (s, m, tid) => testeos.find(x => x.id === idTest(s, m, tid));
+// Total en segundos de un testeo para una fila (suma de las marcas de tiempo; null si falta alguna)
+const totalDe = (t, f) => {
+  const tc = t.campos.filter(c => c.tipo === "t"); if (!tc.length) return null;
+  let s = 0; for (const c of tc) { const x = f.v?.[c.k]; if (x == null) return null; s += x; } return s;
+};
+const dif = (a, b) => (a > 0 && b > 0) ? ((a - b) / a) * 100 : null;
+const fmtPct = v => v == null ? "–" : `${v >= 0 ? "-" : "+"}${Math.abs(v).toFixed(1).replace(".", ",")}%`;
+// Pares de testeos consecutivos de la misma prueba (solo con tiempos)
+const paresDe = plan => {
+  const por = {}; plan.forEach(t => { if (t.campos.some(c => c.tipo === "t")) (por[t.serie] ||= []).push(t); });
+  const pares = []; Object.values(por).forEach(l => { for (let i = 1; i < l.length; i++) pares.push([l[i - 1], l[i]]); });
+  return pares;
+};
 
 function modalTest(sedeId, materiaId, t) {
   const plan = TESTEOS_PLAN[materiaId] || [];
   const ex = testDe(sedeId, materiaId, t.id);
+  const formato = ["Apellido", "Nombre", "División", ...t.campos.map(c => c.tipo === "t" ? `${c.n} (m:ss)` : `${c.n} (cantidad)`)].join("; ");
   const bg = abrirModal(`
     <h3>${esc(t.nombre)}</h3>
     <div class="muted">${esc(nMat(materiaId))} · ${esc(nSede(sedeId))} · ${esc(t.prueba)}</div>
     <label>Fecha en que se tomó</label>
     <input id="f" type="date" style="width:100%" value="${esc(ex?.fecha || hoy())}">
-    <label>Estudiantes y tiempos (una línea por estudiante)</label>
-    <div class="muted" style="font-size:.85rem">Formato: Apellido; Nombre; Cohorte; Tiempo (m:ss). Dejá el tiempo vacío o con "-" si no rindió. Podés pegar columnas copiadas de una planilla.</div>
-    <textarea id="tx" rows="12" style="font-family:monospace" placeholder="PÉREZ; Ana; TMA; 5:42">${esc(filasATexto(ex?.filas))}</textarea>
+    <label>Estudiantes y marcas (una línea por estudiante)</label>
+    <div class="muted" style="font-size:.85rem">Formato: ${esc(formato)}. Dejá vacío o con "-" lo que no se tomó. Podés pegar columnas copiadas de una planilla. La división es, por ejemplo, Mañana A o Noche B.</div>
+    <textarea id="tx" rows="12" style="font-family:monospace" placeholder="PÉREZ; Ana; Mañana A; ${t.campos.map(c => c.tipo === "t" ? "3:45" : "30").join("; ")}">${esc(filasATexto(ex?.filas, t.campos))}</textarea>
     <div class="row"><button class="ghost small" id="prev">Traer la lista del testeo anterior</button></div>
     <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
     <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
   $("#prev", bg).onclick = () => {
     const i = plan.findIndex(x => x.id === t.id);
-    for (let j = i - 1; j >= 0; j--) {
+    for (let j = plan.length - 1; j >= 0; j--) {
+      if (j === i) continue;
       const o = testDe(sedeId, materiaId, plan[j].id);
-      if (o?.filas?.length) { $("#tx", bg).value = o.filas.map(f => `${f.ap}; ${f.no}; ${f.co || ""}; `).join("\n"); return; }
+      if (o?.filas?.length) { $("#tx", bg).value = o.filas.map(f => [f.ap, f.no, f.co || "", ...t.campos.map(() => "")].join("; ")).join("\n"); return; }
     }
-    const err = $("#err", bg); err.hidden = false; err.textContent = "Todavía no hay un testeo anterior cargado.";
+    const err = $("#err", bg); err.hidden = false; err.textContent = "Todavía no hay otro testeo cargado.";
   };
   $("#cancel", bg).onclick = () => bg.remove();
   $("#ok", bg).onclick = async () => {
     const err = $("#err", bg), fecha = $("#f", bg).value;
-    const { filas, errores } = parseFilas($("#tx", bg).value);
+    const { filas, errores } = parseFilas($("#tx", bg).value, t.campos);
     if (!fecha) { err.hidden = false; err.textContent = "Poné la fecha del testeo."; return; }
-    if (errores.length) { err.hidden = false; err.innerHTML = esc(errores.slice(0, 5).join(" · ")); return; }
+    if (errores.length) { err.hidden = false; err.textContent = errores.slice(0, 5).join(" · "); return; }
     if (!filas.length) { err.hidden = false; err.textContent = "Cargá al menos un estudiante."; return; }
     $("#ok", bg).disabled = true;
     try {
@@ -1099,35 +1126,68 @@ function modalTest(sedeId, materiaId, t) {
   };
 }
 
+const promedio = arr => { const v = arr.filter(x => x != null && Number.isFinite(x)); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+// Une los estudiantes de todos los testeos cargados de una cátedra
+function alumnosDe(sedeId, materiaId) {
+  const plan = TESTEOS_PLAN[materiaId] || [], mapa = new Map();
+  plan.forEach(t => (testDe(sedeId, materiaId, t.id)?.filas || []).forEach(f => {
+    const k = kAl(f); if (!mapa.has(k)) mapa.set(k, { ap: f.ap, no: f.no, co: f.co || "", v: {} });
+    const a = mapa.get(k); if (f.co) a.co = f.co; a.v[t.id] = f;
+  }));
+  return [...mapa.values()].sort((a, b) => a.co.localeCompare(b.co, "es") || a.ap.localeCompare(b.ap, "es") || a.no.localeCompare(b.no, "es"));
+}
+
 function tablaProgresion(sedeId, materiaId) {
   const plan = TESTEOS_PLAN[materiaId] || [];
   const cargados = plan.filter(t => testDe(sedeId, materiaId, t.id)?.filas?.length);
   if (!cargados.length) return `<div class="empty">Cuando se cargue el primer testeo, acá aparece la progresión de cada estudiante.</div>`;
-  const alumnos = new Map();
-  cargados.forEach(t => testDe(sedeId, materiaId, t.id).filas.forEach(f => {
-    const k = kAl(f); if (!alumnos.has(k)) alumnos.set(k, { ap: f.ap, no: f.no, co: f.co || "", t: {} });
-    const a = alumnos.get(k); a.t[t.id] = f.t; if (f.co) a.co = f.co;
-  }));
-  // Pares comparables: tests consecutivos de la misma serie
-  const pares = [];
-  const porSerie = {};
-  cargados.forEach(t => (porSerie[t.serie] ||= []).push(t));
-  Object.values(porSerie).forEach(l => { for (let i = 1; i < l.length; i++) pares.push([l[i - 1], l[i]]); });
-  const mejora = (a, x, y) => (a.t[x.id] > 0 && a.t[y.id] > 0) ? ((a.t[x.id] - a.t[y.id]) / a.t[x.id]) * 100 : null;
-  const fmtM = v => v == null ? "–" : `<span class="tag ${v >= 0 ? "ok" : "bad"}">${v >= 0 ? "-" : "+"}${Math.abs(v).toFixed(1).replace(".", ",")}%</span>`;
-  const lista = [...alumnos.values()].sort((a, b) => a.ap.localeCompare(b.ap, "es") || a.no.localeCompare(b.no, "es"));
-  const prom = arr => { const v = arr.filter(x => x != null && Number.isFinite(x)); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+  const lista = alumnosDe(sedeId, materiaId);
+  const pares = paresDe(plan).filter(([x, y]) => cargados.includes(x) && cargados.includes(y));
+  const mej = (a, x, y) => (a.v[x.id] && a.v[y.id]) ? dif(totalDe(x, a.v[x.id]), totalDe(y, a.v[y.id])) : null;
+  const tag = v => v == null ? "–" : `<span class="tag ${v >= 0 ? "ok" : "bad"}">${fmtPct(v)}</span>`;
+  const head = cargados.flatMap(t => t.campos.map(c => `<th>${esc(t.nombre.split("·")[0].trim())}<br><span class="muted" style="font-weight:400">${esc(c.n)}</span></th>`)).join("");
+  const filas = lista.map(a => `<tr><td><strong>${esc(a.ap)}</strong> ${esc(a.no)}</td><td>${esc(a.co)}</td>
+    ${cargados.flatMap(t => t.campos.map(c => `<td>${a.v[t.id] ? valor(c, a.v[t.id].v?.[c.k]) : `<span class="muted">sin dato</span>`}</td>`)).join("")}
+    ${pares.map(([x, y]) => `<td>${tag(mej(a, x, y))}</td>`).join("")}</tr>`).join("");
+  const pie = `<tr><td colspan="2"><b>Promedio</b></td>
+    ${cargados.flatMap(t => t.campos.map(c => { const p = promedio(lista.map(a => a.v[t.id]?.v?.[c.k])); return `<td><b>${p == null ? "–" : (c.tipo === "t" ? fmtT(p) : Math.round(p))}</b></td>`; })).join("")}
+    ${pares.map(([x, y]) => `<td><b>${fmtPct(promedio(lista.map(a => mej(a, x, y))))}</b></td>`).join("")}</tr>`;
   return `<div style="overflow-x:auto"><table>
-    <tr><th>Estudiante</th><th>Cohorte</th>${cargados.map(t => `<th>${esc(t.nombre.split("·")[0].trim())}<br><span class="muted" style="font-weight:400">${esc(t.prueba)}</span></th>`).join("")}
-      ${pares.map(([x, y]) => `<th>Mejora<br><span class="muted" style="font-weight:400">${esc(x.id.toUpperCase())}→${esc(y.id.toUpperCase())}</span></th>`).join("")}</tr>
-    ${lista.map(a => `<tr><td><strong>${esc(a.ap)}</strong> ${esc(a.no)}</td><td>${esc(a.co)}</td>
-      ${cargados.map(t => `<td>${a.t[t.id] === undefined ? `<span class="muted">sin dato</span>` : fmtT(a.t[t.id])}</td>`).join("")}
-      ${pares.map(([x, y]) => `<td>${fmtM(mejora(a, x, y))}</td>`).join("")}</tr>`).join("")}
-    <tr><td colspan="2"><b>Promedio del grupo</b></td>
-      ${cargados.map(t => `<td><b>${fmtT(prom(lista.map(a => a.t[t.id])))}</b><br><span class="muted">${lista.filter(a => a.t[t.id] != null).length} de ${lista.length} rindieron</span></td>`).join("")}
-      ${pares.map(([x, y]) => { const p = prom(lista.map(a => mejora(a, x, y))); return `<td><b>${p == null ? "–" : (p >= 0 ? "-" : "+") + Math.abs(p).toFixed(1).replace(".", ",") + "%"}</b></td>`; }).join("")}</tr>
-  </table></div>
-  <p class="muted" style="margin:8px 0 0">Mejora = cuánto bajó el tiempo entre dos testeos de la misma prueba. En verde, el estudiante mejoró.</p>`;
+    <tr><th>Estudiante</th><th>División</th>${head}${pares.map(([x, y]) => `<th>Mejora<br><span class="muted" style="font-weight:400">${esc(x.nombre.split("·")[0].trim())} → ${esc(y.nombre.split("·")[0].trim())}</span></th>`).join("")}</tr>
+    ${filas}${pie}</table></div>
+    <p class="muted" style="margin:8px 0 0">Mejora = cuánto bajó el tiempo total entre dos testeos de la misma prueba. En verde, el estudiante mejoró.</p>`;
+}
+
+// Por división: cuántos estudiantes tienen marca en cada testeo y el índice de mejora
+function tablaDivisiones(sedeId, materiaId) {
+  const plan = TESTEOS_PLAN[materiaId] || [], lista = alumnosDe(sedeId, materiaId);
+  if (!lista.length) return "";
+  const pares = paresDe(plan);
+  const divs = [...new Set(lista.map(a => a.co || "Sin división"))];
+  const con = (a, t) => a.v[t.id] && t.campos.some(c => a.v[t.id].v?.[c.k] != null);
+  return `<div style="overflow-x:auto"><table><tr><th>División</th><th>Estudiantes</th>${plan.map(t => `<th>${esc(t.nombre.split("·")[0].trim())}<br><span class="muted" style="font-weight:400">con marca</span></th>`).join("")}${pares.map(([x, y]) => `<th>Índice de mejora<br><span class="muted" style="font-weight:400">${esc(x.nombre.split("·")[0].trim())} → ${esc(y.nombre.split("·")[0].trim())}</span></th>`).join("")}</tr>
+    ${divs.map(d => { const g = lista.filter(a => (a.co || "Sin división") === d);
+      return `<tr><td><b>${esc(d)}</b></td><td>${g.length}</td>
+      ${plan.map(t => { const n = g.filter(a => con(a, t)).length; return `<td>${n} <span class="muted">(${Math.round(n / g.length * 100)}%)</span></td>`; }).join("")}
+      ${pares.map(([x, y]) => `<td>${fmtPct(promedio(g.map(a => (a.v[x.id] && a.v[y.id]) ? dif(totalDe(x, a.v[x.id]), totalDe(y, a.v[y.id])) : null)))}</td>`).join("")}</tr>`; }).join("")}
+  </table></div>`;
+}
+
+// Ranking de sedes por índice de mejora (Gestión, Coordinación y Secretaría)
+function rankingSedes(materiaId) {
+  const plan = TESTEOS_PLAN[materiaId] || [], pares = paresDe(plan);
+  if (!pares.length) return "";
+  const filasSedes = sedes.filter(s => s.activa !== false);
+  return pares.map(([x, y]) => {
+    const r = filasSedes.map(s => {
+      const m = alumnosDe(s.id, materiaId).map(a => (a.v[x.id] && a.v[y.id]) ? dif(totalDe(x, a.v[x.id]), totalDe(y, a.v[y.id])) : null).filter(v => v != null);
+      return { s, n: m.length, idx: m.length ? promedio(m) : null, mejoraron: m.filter(v => v > 0).length, retro: m.filter(v => v < 0).length };
+    }).sort((a, b) => (b.idx ?? -1e9) - (a.idx ?? -1e9));
+    if (!r.some(z => z.n)) return "";
+    return `<div style="margin-top:10px"><b>${esc(x.nombre.split("·")[0].trim())} → ${esc(y.nombre.split("·")[0].trim())}</b> <span class="muted">${esc(x.prueba)}</span>
+      <table><tr><th>Puesto</th><th>Sede</th><th>Estudiantes con las dos tomas</th><th>Índice de mejora</th><th>Mejoraron</th><th>Retrocedieron</th></tr>
+      ${r.map((z, i) => `<tr><td>${z.n ? i + 1 : "–"}</td><td>${esc(z.s.nombre)}</td><td>${z.n}</td><td>${fmtPct(z.idx)}</td><td>${z.mejoraron}</td><td>${z.retro}</td></tr>`).join("")}</table></div>`;
+  }).join("");
 }
 
 function panelTesteos() {
@@ -1147,16 +1207,19 @@ function panelTesteos() {
   const selector = cat ? `<span class="muted">${esc(nMat(materiaId))} · ${esc(nSede(sedeId))}</span>` : `<div class="row">
       <select id="ts">${sedes.filter(s => s.activa !== false).map(s => `<option value="${s.id}" ${sedeId === s.id ? "selected" : ""}>${esc(s.nombre)}</option>`).join("")}</select>
       <select id="tm">${prac.map(m => `<option value="${m.id}" ${materiaId === m.id ? "selected" : ""}>${esc(m.nombre)}</option>`).join("")}</select></div>`;
+  const rk = (!cat && plan) ? rankingSedes(materiaId) : "";
   $("#panel").innerHTML = `
     <div class="row sp" style="margin-bottom:10px"><div><h2 style="margin:0">Testeos unificados</h2>${selector}</div></div>
     ${plan ? `<div class="card"><strong>Calendario de testeos</strong>
-      <table><tr><th>Testeo</th><th>Prueba</th><th>Cuándo</th><th>Estado</th><th></th></tr>
+      <div style="overflow-x:auto"><table><tr><th>Testeo</th><th>Prueba</th><th>Cuándo</th><th>Estado</th><th></th></tr>
       ${plan.map(t => { const d = testDe(sedeId, materiaId, t.id); const n = d?.filas?.length || 0;
         return `<tr><td><b>${esc(t.nombre)}</b></td><td>${esc(t.prueba)}</td><td>${esc(t.cuando)}</td>
         <td>${d ? `<span class="tag ok">Cargado</span><br><span class="muted">${esc(fmtCorta(d.fecha))} · ${n} estudiantes</span>` : `<span class="tag off">Pendiente</span>`}</td>
         <td>${editable ? `<button class="ghost small" data-t="${t.id}">${d ? "Editar" : "Cargar"}</button>` : ""}</td></tr>`; }).join("")}
-      </table></div>
-      <div class="card"><strong>Progresión de los estudiantes</strong><div style="margin-top:8px">${tablaProgresion(sedeId, materiaId)}</div></div>`
+      </table></div></div>
+      <div class="card"><strong>Por división</strong><div style="margin-top:8px">${tablaDivisiones(sedeId, materiaId) || `<div class="empty">Todavía no hay estudiantes cargados.</div>`}</div></div>
+      <div class="card"><strong>Progresión de los estudiantes</strong><div style="margin-top:8px">${tablaProgresion(sedeId, materiaId)}</div></div>
+      ${rk ? `<div class="card"><strong>Qué sede mejoró más</strong>${rk}</div>` : ""}`
     : `<div class="card"><div class="empty">Para esta materia todavía no hay testeos unificados definidos.</div></div>`}`;
   if ($("#ts")) $("#ts").onchange = e => { ftest.sede = e.target.value; panelTesteos(); };
   if ($("#tm")) $("#tm").onchange = e => { ftest.materia = e.target.value; panelTesteos(); };
