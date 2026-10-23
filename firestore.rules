@@ -11,20 +11,35 @@ service cloud.firestore {
     function email() { return request.auth.token.email.lower(); }
     function perfil() { return get(/databases/$(database)/documents/usuarios/$(email())).data; }
     function tienePerfil() { return exists(/databases/$(database)/documents/usuarios/$(email())); }
-    // Administrador de origen (Coco) + quienes figuren como admin activo en /usuarios.
-    function isAdmin() {
-      return signedIn() && (email() == 'cocojleguizamon@gmail.com'
-        || (tienePerfil() && (perfil().rol == 'admin' || perfil().rol == 'coordinador') && perfil().activo == true));
-    }
-
-    // ---------- Equipo docente: ingreso anónimo + clave de cátedra ----------
+    // ---------- Ingreso por clave (anónimo): cátedras y áreas ----------
     function esDoc() { return request.auth != null && request.auth.token.firebase.sign_in_provider == 'anonymous'; }
     function ses() { return get(/databases/$(database)/documents/sesiones/$(request.auth.uid)).data; }
     function catId(s, m) { return s + '__' + m; }
+    // Sesión de un área vigente: la clave guardada sigue siendo la actual del área.
+    function conArea() {
+      return esDoc()
+        && exists(/databases/$(database)/documents/sesiones/$(request.auth.uid))
+        && ses().keys().hasAny(['area'])
+        && exists(/databases/$(database)/documents/areas/$(ses().area))
+        && get(/databases/$(database)/documents/areas/$(ses().area)).data.clave == ses().clave;
+    }
+    function areaEs(a) { return conArea() && ses().area == a; }
+
+    // Administrador total: propietario (Google), admins en /usuarios, y las áreas Gestión y Coordinación-Rectoría.
+    function isAdmin() {
+      return (signedIn() && (email() == 'cocojleguizamon@gmail.com'
+        || (tienePerfil() && (perfil().rol == 'admin' || perfil().rol == 'coordinador') && perfil().activo == true)))
+        || areaEs('gestion') || areaEs('coordinacion');
+    }
+    // Puede mirar el seguimiento: administrador total + Secretaría.
+    function isLector() { return isAdmin() || areaEs('secretaria'); }
+    // Calendario: lo ven además Administración (contable).
+    function veCalendario() { return isLector() || areaEs('administracion'); }
     // La sesión vale mientras la clave guardada siga siendo la vigente de esa cátedra.
     function sesionOk() {
       return esDoc()
         && exists(/databases/$(database)/documents/sesiones/$(request.auth.uid))
+        && ses().keys().hasAny(['sedeId'])
         && get(/databases/$(database)/documents/catedras/$(catId(ses().sedeId, ses().materiaId))).data.clave == ses().clave;
     }
 
@@ -50,18 +65,28 @@ service cloud.firestore {
     }
 
     // Sesiones docentes: cada una crea la suya si la clave coincide con la de la cátedra.
+    // Claves de las áreas (Gestión, Administración, Coordinación-Rectoría, Secretaría).
+    match /areas/{id} {
+      allow read, write: if isAdmin();
+    }
+
     match /sesiones/{uid} {
       allow create, update: if esDoc() && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['sedeId', 'materiaId', 'clave', 'creada'])
         && request.resource.data.clave is string
         && request.resource.data.clave.size() >= 4
-        && get(/databases/$(database)/documents/catedras/$(catId(request.resource.data.sedeId, request.resource.data.materiaId))).data.clave == request.resource.data.clave;
+        && (
+          (request.resource.data.keys().hasOnly(['sedeId', 'materiaId', 'clave', 'creada'])
+            && get(/databases/$(database)/documents/catedras/$(catId(request.resource.data.sedeId, request.resource.data.materiaId))).data.clave == request.resource.data.clave)
+          ||
+          (request.resource.data.keys().hasOnly(['area', 'clave', 'creada'])
+            && get(/databases/$(database)/documents/areas/$(request.resource.data.area)).data.clave == request.resource.data.clave)
+        );
       allow read, delete: if esDoc() && request.auth.uid == uid;
     }
 
     // Calendario académico: lo lee la administración y cualquier docente con sesión válida.
     match /calendario/{id} {
-      allow read: if isAdmin() || sesionOk();
+      allow read: if veCalendario() || sesionOk();
       allow write: if isAdmin();
     }
 
@@ -69,7 +94,7 @@ service cloud.firestore {
     // El equipo docente lo carga y actualiza (siempre queda "cargado"); si ya está aprobado, no lo toca.
     // La administración lee todos y aprueba/devuelve.
     match /programas/{id} {
-      allow read: if isAdmin() || (sesionOk() && id == catId(ses().sedeId, ses().materiaId));
+      allow read: if isLector() || (sesionOk() && id == catId(ses().sedeId, ses().materiaId));
       allow create, update: if isAdmin()
         || (sesionOk()
             && id == catId(ses().sedeId, ses().materiaId)

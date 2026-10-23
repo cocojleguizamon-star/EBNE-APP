@@ -21,7 +21,7 @@
   header .who{font-size:.8rem;opacity:.9;text-align:right}
   header button{background:transparent;border:1px solid #ffffff88;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer}
   main{max-width:980px;margin:0 auto;padding:16px}
-  .inicio{max-width:380px;margin:7vh auto;text-align:center;padding:0 8px}
+  .inicio{max-width:380px;margin:5vh auto;text-align:center;padding:0 8px}
   .inicio img{width:min(240px,70vw);margin-bottom:18px}
   .puertas{display:flex;flex-direction:column;gap:12px;margin-top:10px}
   .puerta{background:var(--azul-osc);color:#fff;border:0;border-radius:14px;padding:18px;font-size:1.1rem;font-weight:600;cursor:pointer}
@@ -125,8 +125,17 @@ const TIPOS = {
   feriado: ["Feriado / sin clases", "#7a8794"],
   otro: ["Otro", "#4b5b6b"],
 };
+// Niveles: full (edita todo), lector (solo mira el seguimiento), conta (presentismo docente), docente.
+const AREAS = {
+  gestion: ["Gestión EBNE", "full"],
+  administracion: ["Administración EBNE", "conta"],
+  coordinacion: ["Coordinación-Rectoría EBNE", "full"],
+  secretaria: ["Secretaría EBNE", "lector"],
+};
 const TABS = {
-  admin: [["cumplimiento","Seguimiento"],["calendario","Calendario"],["catedras","Cátedras"],["equipo","Equipo de gestión"],["sedes","Sedes"],["materias","Materias"]],
+  full: [["cumplimiento","Seguimiento"],["calendario","Calendario"],["catedras","Cátedras"],["equipo","Accesos"],["sedes","Sedes"],["materias","Materias"]],
+  lector: [["cumplimiento","Seguimiento"],["calendario","Calendario"]],
+  conta: [["presentismo","Presentismo docente"],["calendario","Calendario"]],
   docente: [["mis","Mis tareas"],["calendario","Calendario"]],
 };
 
@@ -157,77 +166,47 @@ function nuevaClave() {
 }
 
 // ---------- Estado ----------
-let me = null;          // administración (cuenta de Google)
+let me = null;          // propietario (cuenta de Google)
+let area = null;        // área EBNE que ingresó con clave
 let docSes = null;      // equipo docente: { sedeId, materiaId } (entra con la clave de la cátedra)
 let preview = null;     // administración mirando la pantalla de una cátedra (solo lectura)
 let entrando = false;
-let sedes = [], materias = [], usuarios = [], calendario = [], programas = [], catedras = [];
+let sedes = [], materias = [], usuarios = [], calendario = [], programas = [], catedras = [], areas = [];
 let tab = "mis";
 let filtro = { sede: "" };
 let fcal = { sede: "", tipo: "", pasados: false };
 let fcum = { sede: "", estado: "" };
 const catActual = () => preview || docSes;
-const esGestion = () => !!me && !docSes;
+const nivel = () => catActual() ? "docente" : me ? "full" : area ? AREAS[area][1] : "docente";
+const canEdit = () => nivel() === "full";
+const actor = () => me?.id || (area ? "area:" + area : "");
 const combosActivos = () => sedes.filter(s => s.activa !== false)
   .flatMap(s => materias.filter(m => m.activa !== false).map(m => ({ sedeId: s.id, materiaId: m.id })));
 
 const app$ = $("#app");
 const setHeader = on => { $("header").style.display = on ? "flex" : "none"; };
 $("#btnSalir").onclick = async () => {
-  if (docSes) { try { await deleteDoc(doc(db, "sesiones", auth.currentUser.uid)); } catch {} }
+  if (auth.currentUser?.isAnonymous) { try { await deleteDoc(doc(db, "sesiones", auth.currentUser.uid)); } catch {} }
   preview = null;
   await signOut(auth);
 };
 async function cerrarYMostrar(fn) {
   entrando = true;
   try { await signOut(auth); } catch {}
-  me = null; docSes = null; preview = null;
+  me = null; docSes = null; area = null; preview = null;
   fn();
   setTimeout(() => { entrando = false; }, 700);
 }
 
 onAuthStateChanged(auth, async (u) => {
   if (entrando) return;
-  if (!u) { me = null; docSes = null; preview = null; return pantallaInicio(); }
-  try { u.isAnonymous ? await cargarSesionDocente(u) : await cargarSesion(u); }
+  if (!u) { me = null; docSes = null; area = null; preview = null; return pantallaInicio(); }
+  try { u.isAnonymous ? await cargarSesionAnon(u) : await cargarSesion(u); }
   catch (e) { console.error(e); pantallaError(e); }
 });
 
-// ---------- Pantallas de ingreso ----------
-function pantallaInicio(msg) {
-  setHeader(false); $("#who").textContent = ""; $("#btnSalir").hidden = true;
-  app$.innerHTML = `
-    <div class="inicio">
-      <img src="logo.png" alt="EBNE">
-      ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
-      <div class="puertas">
-        <button class="puerta" id="pd">Equipo docente</button>
-        <button class="puerta" id="pg">Equipo de gestión</button>
-      </div>
-    </div>`;
-  $("#pd").onclick = () => pantallaDocente();
-  $("#pg").onclick = () => pantallaGestion();
-}
-
-function pantallaGestion(msg) {
-  setHeader(false); $("#who").textContent = ""; $("#btnSalir").hidden = true;
-  app$.innerHTML = `
-    <div class="inicio">
-      <img src="logo.png" alt="EBNE">
-      <h2 style="margin:.2rem 0">Equipo de gestión</h2>
-      <p class="muted" style="margin:0 0 14px">Ingresá con la cuenta de Google habilitada por la administración.</p>
-      ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
-      <button class="primary" id="go">Ingresar con Google</button>
-      <p><button class="ghost small" id="volver">← Volver</button></p>
-    </div>`;
-  $("#volver").onclick = () => pantallaInicio();
-  $("#go").onclick = async () => {
-    try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-    catch (e) { pantallaGestion("No se pudo iniciar sesión: " + (e.code || e.message)); }
-  };
-}
-
-async function pantallaDocente(msg) {
+// ---------- Pantalla de ingreso única ----------
+async function pantallaInicio(msg) {
   setHeader(false); $("#who").textContent = ""; $("#btnSalir").hidden = true;
   if (!sedes.length || !materias.length) {
     app$.innerHTML = `<div class="empty">Cargando…</div>`;
@@ -238,40 +217,45 @@ async function pantallaDocente(msg) {
       ]);
       sedes = s.docs.map(d => ({ id: d.id, ...d.data() }));
       materias = m.docs.map(d => ({ id: d.id, ...d.data() }));
-    } catch (e) { return pantallaInicio("No se pudo cargar la lista de sedes y materias."); }
+    } catch (e) { console.error(e); }
   }
   const ss = sedes.filter(s => s.activa !== false), mm = materias.filter(m => m.activa !== false);
   app$.innerHTML = `
     <div class="inicio">
       <img src="logo.png" alt="EBNE">
-      <h2 style="margin:.2rem 0">Equipo docente</h2>
-      <p class="muted" style="margin:0 0 6px">Elegí tu sede y tu materia, y escribí la clave de la cátedra.</p>
+      <h2 style="margin:.2rem 0 14px">Bienvenido al Management App EBNE</h2>
       ${msg ? `<div class="msg bad">${esc(msg)}</div>` : ""}
       <div style="text-align:left">
-        <label>Sede</label>
-        <select id="ds" style="width:100%"><option value="">Elegir sede…</option>${ss.map(s => `<option value="${s.id}">${esc(s.nombre)}</option>`).join("")}</select>
-        <label>Materia</label>
-        <select id="dm" style="width:100%"><option value="">Elegir materia…</option>${mm.map(m => `<option value="${m.id}">${esc(m.nombre)}</option>`).join("")}</select>
-        <label>Clave de la cátedra</label>
+        <label>¿Quién ingresa?</label>
+        <select id="sel" style="width:100%">
+          <option value="">Elegir…</option>
+          ${ss.map(s => `<optgroup label="Materia · ${esc(s.nombre)}">${mm.map(m => `<option value="doc|${esc(s.id)}|${esc(m.id)}">${esc(m.nombre)}</option>`).join("")}</optgroup>`).join("")}
+          <optgroup label="Equipo EBNE">${Object.entries(AREAS).map(([k,[n]]) => `<option value="area|${k}">${esc(n)}</option>`).join("")}</optgroup>
+        </select>
+        <label>Clave</label>
         <input id="dc" type="password" autocomplete="off" style="width:100%" placeholder="Clave">
       </div>
       <p><button class="primary" id="ing" style="width:100%">Ingresar</button></p>
-      <p><button class="ghost small" id="volver">← Volver</button></p>
+      <p><button class="ghost small" id="goog">Acceso del propietario (Google)</button></p>
     </div>`;
-  $("#volver").onclick = () => pantallaInicio();
+  $("#goog").onclick = async () => {
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+    catch (e) { pantallaInicio("No se pudo iniciar sesión: " + (e.code || e.message)); }
+  };
   const entrar = async () => {
-    const sedeId = $("#ds").value, materiaId = $("#dm").value, clave = $("#dc").value.trim();
-    if (!sedeId || !materiaId || !clave) return pantallaDocente("Elegí sede y materia, y escribí la clave.");
+    const [tipo, a, b] = ($("#sel").value || "").split("|"), clave = $("#dc").value.trim();
+    if (!tipo || !clave) return pantallaInicio("Elegí quién ingresa y escribí la clave.");
+    const datos = tipo === "area" ? { area: a, clave } : { sedeId: a, materiaId: b, clave };
     $("#ing").disabled = true; entrando = true;
     try {
       const cred = await signInAnonymously(auth);
-      await setDoc(doc(db, "sesiones", cred.user.uid), { sedeId, materiaId, clave, creada: new Date().toISOString() });
+      await setDoc(doc(db, "sesiones", cred.user.uid), { ...datos, creada: new Date().toISOString() });
       entrando = false;
-      await cargarSesionDocente(cred.user);
+      await cargarSesionAnon(cred.user);
     } catch (e) {
       console.error(e);
-      await cerrarYMostrar(() => pantallaDocente(e.code === "permission-denied"
-        ? "La clave no corresponde a esa sede y materia."
+      await cerrarYMostrar(() => pantallaInicio(e.code === "permission-denied"
+        ? "La clave no es correcta para esa opción."
         : "No se pudo ingresar: " + (e.code || e.message)));
     }
   };
@@ -285,42 +269,45 @@ function pantallaError(e) {
   <button class="ghost" onclick="location.reload()">Reintentar</button></div>`;
 }
 
-async function cargarSesion(u) {
+async function cargarSesion(u) {   // propietario con Google
   const email = u.email.toLowerCase();
   const snap = await getDoc(doc(db, "usuarios", email));
   me = snap.exists() ? { id: email, ...snap.data() } : null;
   if (!me && email === ADMIN_ORIGEN) me = { id: email, email, nombre: u.displayName || "Administrador", rol: "admin", activo: true };
   if (!me || me.activo === false || rolDe(me) !== "admin") {
-    return cerrarYMostrar(() => pantallaGestion("Tu mail (" + email + ") no está habilitado para el equipo de gestión."));
+    return cerrarYMostrar(() => pantallaInicio("Tu mail (" + email + ") no está habilitado."));
   }
-  docSes = null; preview = null;
+  docSes = null; area = null; preview = null;
   setHeader(true);
-  $("#who").innerHTML = `${esc(me.nombre || email)}<br>Equipo de gestión`;
+  $("#who").innerHTML = `${esc(me.nombre || email)}<br>Propietario`;
   $("#btnSalir").hidden = false;
-  tab = TABS.admin[0][0];
+  tab = TABS.full[0][0];
   await cargarDatos();
   vista();
 }
 
-async function cargarSesionDocente(u) {
+async function cargarSesionAnon(u) {   // ingreso por clave: cátedra o área
   const s = await getDoc(doc(db, "sesiones", u.uid));
   if (!s.exists()) return cerrarYMostrar(() => pantallaInicio());
   me = null; preview = null;
-  docSes = { sedeId: s.data().sedeId, materiaId: s.data().materiaId };
+  const d = s.data();
+  if (d.area && AREAS[d.area]) { area = d.area; docSes = null; }
+  else { area = null; docSes = { sedeId: d.sedeId, materiaId: d.materiaId }; }
   try { await cargarDatos(); }
   catch (e) {
     if (e.code === "permission-denied")
-      return cerrarYMostrar(() => pantallaDocente("La clave de esa cátedra cambió. Ingresá de nuevo."));
+      return cerrarYMostrar(() => pantallaInicio("La clave cambió. Ingresá de nuevo."));
     throw e;
   }
   setHeader(true);
-  $("#who").innerHTML = `${esc(nMat(docSes.materiaId))}<br>${esc(nSede(docSes.sedeId))}`;
+  $("#who").innerHTML = area ? `${esc(AREAS[area][0])}` : `${esc(nMat(docSes.materiaId))}<br>${esc(nSede(docSes.sedeId))}`;
   $("#btnSalir").hidden = false;
-  tab = "mis";
+  tab = TABS[nivel()][0][0];
   vista();
 }
 
 async function cargarDatos() {
+  const nv = nivel();
   const [s, m, c] = await Promise.all([
     getDocs(query(collection(db, "sedes"), orderBy("orden"))),
     getDocs(query(collection(db, "materias"), orderBy("orden"))),
@@ -332,13 +319,18 @@ async function cargarDatos() {
   if (docSes) {
     const p = await getDoc(doc(db, "programas", pid(docSes.sedeId, docSes.materiaId)));
     programas = p.exists() ? [{ id: p.id, ...p.data() }] : [];
-  } else {
-    const [us, pr, ca] = await Promise.all([
-      getDocs(collection(db, "usuarios")), getDocs(collection(db, "programas")), getDocs(collection(db, "catedras")),
+  } else if (nv === "full") {
+    const [us, pr, ca, ar] = await Promise.all([
+      getDocs(collection(db, "usuarios")), getDocs(collection(db, "programas")),
+      getDocs(collection(db, "catedras")), getDocs(collection(db, "areas")),
     ]);
     usuarios = us.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre||"").localeCompare(b.nombre||""));
     programas = pr.docs.map(d => ({ id: d.id, ...d.data() }));
     catedras = ca.docs.map(d => ({ id: d.id, ...d.data() }));
+    areas = ar.docs.map(d => ({ id: d.id, ...d.data() }));
+  } else if (nv === "lector") {
+    programas = (await getDocs(collection(db, "programas"))).docs.map(d => ({ id: d.id, ...d.data() }));
+    catedras = [];
   }
 }
 const nSede = id => id === "todas" ? "Todas las sedes" : (sedes.find(s => s.id === id)?.nombre ?? id);
@@ -346,15 +338,14 @@ const nMat = id => materias.find(m => m.id === id)?.nombre ?? id;
 
 // ---------- Estructura general ----------
 function vista() {
-  const cat = catActual();
-  const rol = cat ? "docente" : "admin";
+  const rol = nivel();
   if (!TABS[rol].some(t => t[0] === tab)) tab = TABS[rol][0][0];
-  const vacio = rol === "admin" && (!sedes.length || !materias.length);
+  const vacio = rol === "full" && (!sedes.length || !materias.length);
   const combos = combosActivos();
   app$.innerHTML = `
     ${preview ? `<div class="msg row sp"><span>Estás viendo la pantalla del equipo docente de <b>${esc(nMat(preview.materiaId))} · ${esc(nSede(preview.sedeId))}</b> (solo lectura).</span>
       <button class="ghost small" id="salirPrev">Volver a gestión</button></div>` : ""}
-    ${esGestion() && !preview && combos.length ? `<div class="row" style="margin-bottom:10px"><span class="muted">Ver como equipo docente:</span>
+    ${rol === "full" && !preview && combos.length ? `<div class="row" style="margin-bottom:10px"><span class="muted">Ver como equipo docente:</span>
       <select id="prev"><option value="">Elegir cátedra…</option>${combos.map(c => `<option value="${esc(c.sedeId)}|${esc(c.materiaId)}">${esc(nSede(c.sedeId))} · ${esc(nMat(c.materiaId))}</option>`).join("")}</select></div>` : ""}
     ${vacio ? `<div class="msg row sp"><span>Todavía no hay sedes o materias cargadas.</span>
       <button class="primary" id="seed">Cargar sedes y materias iniciales</button></div>` : ""}
@@ -370,7 +361,7 @@ function vista() {
   };
   if ($("#salirPrev")) $("#salirPrev").onclick = () => { preview = null; tab = "cumplimiento"; vista(); };
   app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vista(); });
-  ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, catedras: panelCatedras, equipo: panelEquipo,
+  ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, catedras: panelCatedras, equipo: panelAccesos, presentismo: panelPresentismo,
      sedes: panelSedes, materias: panelMaterias, mis: panelMis })[tab]();
 }
 
@@ -500,7 +491,7 @@ function panelCumplimiento() {
     .sort((x, y) => ORDEN_K[x.k] - ORDEN_K[y.k] || nMat(x.c.materiaId).localeCompare(nMat(y.c.materiaId)));
   const chips = [["atrasado","Atrasados"],["devuelto","Devueltos"],["porvencer","Por vencer"],["cargado","Para revisar"],["pendiente","Pendientes"],["aprobado","Aprobados"]];
   const sinFecha = sedes.some(s => s.activa !== false && !vencimientoDe(s.id));
-  const sinClave = todas.filter(r => !r.ct?.clave).length;
+  const sinClave = canEdit() ? todas.filter(r => !r.ct?.clave).length : 0;
   $("#panel").innerHTML = `
     ${sinFecha ? `<div class="msg">Falta cargar en el Calendario el <b>vencimiento de programa</b> de alguna sede. Sin esa fecha no se puede calcular el atraso.</div>` : ""}
     ${sinClave ? `<div class="msg">Hay <b>${sinClave}</b> cátedras sin clave de ingreso. Generalas en la pestaña <b>Cátedras</b>.</div>` : ""}
@@ -518,8 +509,8 @@ function panelCumplimiento() {
         <td><strong>${esc(nMat(r.c.materiaId))}</strong><br><span class="muted">${esc(nSede(r.c.sedeId))}</span></td>
         <td>${tag(r.k, r.dl)}${r.p?.cargadoPor ? `<br><span class="muted">Cargó ${esc(r.p.cargadoPor)}</span>` : ""}${r.p?.comentario && r.k==="devuelto" ? `<br><span class="muted">${esc(r.p.comentario)}</span>`:""}</td>
         <td>${r.p ? `${enlace(r.p.link,"Ver")}
-          ${r.p.estado !== "aprobado" ? `<button class="ghost small" data-ap="${esc(r.p.id)}">Aprobar</button>` : ""}
-          ${r.p.estado !== "devuelto" ? `<button class="ghost small danger" data-dv="${esc(r.p.id)}">Devolver</button>` : ""}` : ""}</td>
+          ${canEdit() && r.p.estado !== "aprobado" ? `<button class="ghost small" data-ap="${esc(r.p.id)}">Aprobar</button>` : ""}
+          ${canEdit() && r.p.estado !== "devuelto" ? `<button class="ghost small danger" data-dv="${esc(r.p.id)}">Devolver</button>` : ""}` : ""}</td>
       </tr>`).join("")}</table>`
       : `<div class="empty">No hay cátedras con ese filtro.</div>`}
     </div>`;
@@ -527,25 +518,25 @@ function panelCumplimiento() {
   $("#panel").querySelectorAll("[data-k]").forEach(b => b.onclick = () => { fcum.estado = fcum.estado === b.dataset.k ? "" : b.dataset.k; panelCumplimiento(); });
   if ($("#limpiar")) $("#limpiar").onclick = () => { fcum.estado = ""; panelCumplimiento(); };
   $("#panel").querySelectorAll("[data-ap]").forEach(b => b.onclick = async () => {
-    await updateDoc(doc(db, "programas", b.dataset.ap), { estado: "aprobado", comentario: "", revisadoPor: me.id, revisadoEn: new Date().toISOString() });
+    await updateDoc(doc(db, "programas", b.dataset.ap), { estado: "aprobado", comentario: "", revisadoPor: actor(), revisadoEn: new Date().toISOString() });
     await cargarDatos(); panelCumplimiento();
   });
   $("#panel").querySelectorAll("[data-dv]").forEach(b => b.onclick = async () => {
     const motivo = prompt("¿Qué tiene que corregir el equipo docente?");
     if (motivo === null) return;
-    await updateDoc(doc(db, "programas", b.dataset.dv), { estado: "devuelto", comentario: motivo.trim(), revisadoPor: me.id, revisadoEn: new Date().toISOString() });
+    await updateDoc(doc(db, "programas", b.dataset.dv), { estado: "devuelto", comentario: motivo.trim(), revisadoPor: actor(), revisadoEn: new Date().toISOString() });
     await cargarDatos(); panelCumplimiento();
   });
 }
 
 // ---------- Calendario académico ----------
 function panelCalendario() {
-  const admin = !catActual();
+  const admin = canEdit();
   const misSedes = new Set(catActual() ? [catActual().sedeId] : []);
   const h = hoy();
   let ev = calendario.filter(e =>
     (!fcal.sede || e.sedeId === fcal.sede || e.sedeId === "todas") && (!fcal.tipo || e.tipo === fcal.tipo));
-  if (!admin && !fcal.sede && misSedes.size) ev = ev.filter(e => e.sedeId === "todas" || misSedes.has(e.sedeId));
+  if (catActual() && !fcal.sede && misSedes.size) ev = ev.filter(e => e.sedeId === "todas" || misSedes.has(e.sedeId));
   if (!fcal.pasados) ev = ev.filter(e => (e.fechaFin || e.fecha) >= h);
   const meses = {};
   ev.forEach(e => (meses[e.fecha.slice(0,7)] ||= []).push(e));
@@ -553,7 +544,7 @@ function panelCalendario() {
     <div class="card">
       <div class="row sp">
         <div class="row">
-          <select id="cs"><option value="">${!admin?"Mis sedes":"Todas las sedes"}</option>${sedes.map(s=>`<option value="${s.id}" ${fcal.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
+          <select id="cs"><option value="">${catActual()?"Mis sedes":"Todas las sedes"}</option>${sedes.map(s=>`<option value="${s.id}" ${fcal.sede===s.id?"selected":""}>${esc(s.nombre)}</option>`).join("")}</select>
           <select id="ct"><option value="">Todos los tipos</option>${Object.entries(TIPOS).map(([k,[t]])=>`<option value="${k}" ${fcal.tipo===k?"selected":""}>${esc(t)}</option>`).join("")}</select>
           <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="cp" ${fcal.pasados?"checked":""}> Ver pasados</label>
         </div>
@@ -720,21 +711,45 @@ function modalCatedra(sedeId, materiaId) {
   };
 }
 
-// ---------- Gestión: Equipo de gestión (cuentas de Google) ----------
-function panelEquipo() {
+// ---------- Gestión: Accesos (claves de las áreas y cuentas de Google) ----------
+function panelAccesos() {
   const lista = usuarios.filter(u => rolDe(u) === "admin");
+  const ar = k => areas.find(x => x.id === k);
   $("#panel").innerHTML = `
-    <div class="card"><div class="row sp"><strong>Equipo de gestión</strong><button class="primary" id="nuevo">+ Agregar</button></div>
-      <p class="muted">Quienes están acá ingresan por “Equipo de gestión” con su cuenta de Google y ven lo mismo que vos. Sumá a la rectora y a la entidad propietaria.</p>
+    <div class="card"><strong>Claves de las áreas</strong>
+      <p class="muted">Cada área ingresa desde la pantalla inicial eligiéndose en el desplegable y escribiendo su clave.</p>
+      <table><tr><th>Área</th><th>Puede</th><th>Clave</th><th></th></tr>
+      ${Object.entries(AREAS).map(([k,[n,nv]]) => `<tr>
+        <td><strong>${esc(n)}</strong></td>
+        <td class="muted">${nv==="full"?"Ver y editar todo":nv==="lector"?"Solo ver seguimiento y calendario":"Ver presentismo docente"}</td>
+        <td>${ar(k)?.clave ? `<code>${esc(ar(k).clave)}</code>` : `<span class="tag warn">Sin clave</span>`}</td>
+        <td><button class="ghost small" data-a="${k}">${ar(k)?.clave ? "Cambiar" : "Generar"}</button></td></tr>`).join("")}
+      </table></div>
+    <div class="card"><div class="row sp"><strong>Propietarios con Google</strong><button class="primary small" id="nuevo">+ Agregar</button></div>
+      <p class="muted">Entran con “Acceso del propietario (Google)” y ven todo.</p>
       ${lista.length ? `<table><tr><th>Persona</th><th>Estado</th><th></th></tr>
       ${lista.map(u => `<tr><td><strong>${esc(u.nombre||"(sin nombre)")}</strong><br><span class="muted">${esc(u.email)}</span></td>
         <td><span class="tag ${u.activo===false?"off":"ok"}">${u.activo===false?"Inactivo":"Activo"}</span></td>
         <td><button class="ghost small" data-e="${esc(u.id)}">Editar</button></td></tr>`).join("")}</table>`
-      : `<div class="empty">Solo figurás vos por defecto. Agregá a Lili y a la entidad propietaria.</div>`}
+      : `<div class="empty">Solo figurás vos por defecto.</div>`}
     </div>`;
   $("#nuevo").onclick = () => modalUsuario(null);
   $("#panel").querySelectorAll("[data-e]").forEach(b => b.onclick = () => modalUsuario(usuarios.find(u => u.id === b.dataset.e)));
+  $("#panel").querySelectorAll("[data-a]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.a;
+    if (ar(k)?.clave && !confirm(`Si cambiás la clave de ${AREAS[k][0]}, quienes la tienen deberán ingresar de nuevo. ¿Seguro?`)) return;
+    await setDoc(doc(db, "areas", k), { nombre: AREAS[k][0], clave: nuevaClave() }, { merge: true });
+    await cargarDatos(); panelAccesos();
+  });
 }
+
+// ---------- Administración: presentismo docente ----------
+function panelPresentismo() {
+  $("#panel").innerHTML = `<div class="card"><div class="empty">
+    Acá va a verse el presentismo de los profes: quién estuvo presente y las observaciones de cada clase.<br>
+    Todavía no hay datos: se carga con el libro de temas, que es la próxima etapa.</div></div>`;
+}
+
 function modalUsuario(u) {
   const nuevo = !u;
   const bg = abrirModal(`
