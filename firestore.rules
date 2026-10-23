@@ -123,6 +123,23 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Testeos unificados: solo materias prácticas. Un documento por testeo de cada cátedra (sede__materia__testeo).
+    function esPractica(m) {
+      return exists(/databases/$(database)/documents/materias/$(m))
+        && get(/databases/$(database)/documents/materias/$(m)).data.area == 'Prácticas y condición física';
+    }
+    match /testeos/{id} {
+      allow read: if isLector()
+        || (sesionOk() && resource.data.sedeId == ses().sedeId && resource.data.materiaId == ses().materiaId);
+      allow create, update: if isAdmin()
+        || (sesionOk()
+            && esPractica(ses().materiaId)
+            && request.resource.data.sedeId == ses().sedeId
+            && request.resource.data.materiaId == ses().materiaId
+            && id == catId(ses().sedeId, ses().materiaId) + '__' + request.resource.data.testId);
+      allow delete: if isAdmin();
+    }
+
     // Todo lo demás, cerrado.
     match /{document=**} {
       allow read, write: if false;

@@ -133,10 +133,10 @@ const AREAS = {
   secretaria: ["Secretaría EBNE", "lector"],
 };
 const TABS = {
-  full: [["cumplimiento","Seguimiento"],["libros","Libros de temas"],["calendario","Calendario"],["catedras","Cátedras"],["equipo","Accesos"],["sedes","Sedes"],["materias","Materias"]],
-  lector: [["cumplimiento","Seguimiento"],["libros","Libros de temas"],["calendario","Calendario"]],
+  full: [["cumplimiento","Seguimiento"],["libros","Libros de temas"],["testeos","Testeos unificados"],["calendario","Calendario"],["catedras","Cátedras"],["equipo","Accesos"],["sedes","Sedes"],["materias","Materias"]],
+  lector: [["cumplimiento","Seguimiento"],["libros","Libros de temas"],["testeos","Testeos unificados"],["calendario","Calendario"]],
   conta: [["presentismo","Presentismo docente"],["calendario","Calendario"]],
-  docente: [["mis","Mis tareas"],["libro","Libro de temas"],["calendario","Calendario"]],
+  docente: [["mis","Mis tareas"],["libro","Libro de temas"],["testeos","Testeos unificados"],["calendario","Calendario"]],
 };
 
 // ---------- Utilidades ----------
@@ -177,6 +177,7 @@ let filtro = { sede: "" };
 let fcal = { sede: "", tipo: "", pasados: false };
 let fcum = { sede: "", estado: "" };
 const catActual = () => preview || docSes;
+const tabsDe = rol => TABS[rol].filter(t => t[0] !== "testeos" || rol !== "docente" || (catActual() && materias.find(m => m.id === catActual().materiaId)?.area === "Prácticas y condición física"));
 const nivel = () => catActual() ? "docente" : me ? "full" : area ? AREAS[area][1] : "docente";
 const canEdit = () => nivel() === "full";
 const actor = () => me?.id || (area ? "area:" + area : "");
@@ -237,6 +238,10 @@ async function pantallaInicio(msg) {
       </div>
       <p><button class="primary" id="ing" style="width:100%">Ingresar</button></p>
       <p><button class="ghost small" id="goog">Acceso del propietario (Google)</button></p>
+      <details style="text-align:left;margin-top:14px"><summary><b>Testeos unificados</b> · materias prácticas</summary>
+        <div class="muted" style="font-size:.9rem;margin-top:6px">Mismos testeos en todas las sedes, para comparar y medir la progresión. Los resultados se cargan al ingresar con la clave de la cátedra.</div>
+        ${Object.entries(TESTEOS_PLAN).map(([k, l]) => `<p style="margin:10px 0 2px"><b>${esc(MAT_NOMBRE_PLAN[k])}</b></p><ul style="margin:0;padding-left:18px;font-size:.9rem">${l.map(t => `<li>${esc(t.prueba)} · ${esc(t.cuando)}</li>`).join("")}</ul>`).join("")}
+      </details>
     </div>`;
   $("#goog").onclick = async () => {
     try { await signInWithPopup(auth, new GoogleAuthProvider()); }
@@ -325,7 +330,12 @@ async function cargarDatos() {
     ]);
     libros = lb.docs.map(d => ({ id: d.id, ...d.data() }));
     horarios = hr.exists() ? [{ id: hr.id, ...hr.data() }] : [];
+    if (esPractica(docSes.materiaId)) {
+      const ts = await getDocs(query(collection(db, "testeos"), where("sedeId", "==", docSes.sedeId), where("materiaId", "==", docSes.materiaId)));
+      testeos = ts.docs.map(d => ({ id: d.id, ...d.data() }));
+    } else testeos = [];
   } else if (nv === "full") {
+    testeos = (await getDocs(collection(db, "testeos"))).docs.map(d => ({ id: d.id, ...d.data() }));
     const [us, pr, ca, ar, lb, hr] = await Promise.all([
       getDocs(collection(db, "usuarios")), getDocs(collection(db, "programas")),
       getDocs(collection(db, "catedras")), getDocs(collection(db, "areas")),
@@ -338,6 +348,7 @@ async function cargarDatos() {
     catedras = ca.docs.map(d => ({ id: d.id, ...d.data() }));
     areas = ar.docs.map(d => ({ id: d.id, ...d.data() }));
   } else if (nv === "lector") {
+    testeos = (await getDocs(collection(db, "testeos"))).docs.map(d => ({ id: d.id, ...d.data() }));
     const [pr, lb, hr] = await Promise.all([getDocs(collection(db, "programas")), getDocs(collection(db, "libros")), getDocs(collection(db, "horarios"))]);
     programas = pr.docs.map(d => ({ id: d.id, ...d.data() }));
     libros = lb.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -355,7 +366,7 @@ const nMat = id => materias.find(m => m.id === id)?.nombre ?? id;
 // ---------- Estructura general ----------
 function vista() {
   const rol = nivel();
-  if (!TABS[rol].some(t => t[0] === tab)) tab = TABS[rol][0][0];
+  if (!tabsDe(rol).some(t => t[0] === tab)) tab = tabsDe(rol)[0][0];
   const vacio = rol === "full" && (!sedes.length || !materias.length);
   const combos = combosActivos();
   app$.innerHTML = `
@@ -366,7 +377,7 @@ function vista() {
     ${vacio ? `<div class="msg row sp"><span>Todavía no hay sedes o materias cargadas.</span>
       <button class="primary" id="seed">Cargar sedes y materias iniciales</button></div>` : ""}
     <nav class="tabs">
-      ${TABS[rol].map(([k,t]) => `<button data-t="${k}" class="${tab===k?"on":""}">${t}</button>`).join("")}
+      ${tabsDe(rol).map(([k,t]) => `<button data-t="${k}" class="${tab===k?"on":""}">${t}</button>`).join("")}
     </nav>
     <section id="panel"></section>`;
   if (vacio) $("#seed").onclick = cargarIniciales;
@@ -378,7 +389,7 @@ function vista() {
   if ($("#salirPrev")) $("#salirPrev").onclick = () => { preview = null; tab = "cumplimiento"; vista(); };
   app$.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; vista(); });
   ({ cumplimiento: panelCumplimiento, calendario: panelCalendario, catedras: panelCatedras, equipo: panelAccesos, presentismo: panelPresentismo, libro: panelLibroDoc, libros: panelLibros,
-     sedes: panelSedes, materias: panelMaterias, mis: panelMis })[tab]();
+     sedes: panelSedes, materias: panelMaterias, mis: panelMis, testeos: panelTesteos })[tab]();
 }
 
 function abrirModal(html) {
@@ -997,6 +1008,161 @@ function modalUsuario(u) {
 }
 
 // ---------- Sedes y materias (admin) ----------
+// ---------- Testeos unificados (solo materias prácticas) ----------
+const AREA_PRACTICA = "Prácticas y condición física";
+const TESTEOS_PLAN = {
+  "natacion": [
+    { id: "n1", nombre: "1er testeo · Diagnóstico de ingreso", prueba: "200 m crol + 100 m pecho", cuando: "Ingreso", serie: "a" },
+    { id: "n2", nombre: "2do testeo · Comparativo", prueba: "200 m crol + 100 m pecho", cuando: "Semana de mayo", serie: "a" },
+    { id: "n3", nombre: "3er testeo", prueba: "300 m crol + 100 m libres (velocidad)", cuando: "1ª semana de agosto", serie: "b" },
+    { id: "n4", nombre: "4to testeo", prueba: "300 m crol + 100 m libres (velocidad)", cuando: "Fines de noviembre, antes de Mar del Plata", serie: "b" },
+    { id: "n5", nombre: "Testeo final", prueba: "200 m crol en 3'45\" y 100 m pecho en 2'", cuando: "1ª semana de marzo (fin del curso)", serie: "c" },
+  ],
+  "preparacion-fisica": [
+    { id: "p1", nombre: "1er testeo", prueba: "1000 m", cuando: "2ª quincena de mayo", serie: "m1000" },
+    { id: "p2", nombre: "2do testeo", prueba: "400 m", cuando: "1ª quincena de julio, antes del receso invernal", serie: "m400" },
+    { id: "p3", nombre: "3er testeo", prueba: "1000 m", cuando: "2ª quincena de octubre", serie: "m1000" },
+    { id: "p4", nombre: "4to testeo", prueba: "400 m", cuando: "Última semana de noviembre, antes de Mar del Plata", serie: "m400" },
+  ],
+};
+const MAT_NOMBRE_PLAN = { "natacion": "Natación", "preparacion-fisica": "Preparación Física" };
+let testeos = [];
+let ftest = { sede: "", materia: "" };
+const esPractica = mid => materias.find(m => m.id === mid)?.area === AREA_PRACTICA;
+const idTest = (s, m, t) => `${s}__${m}__${t}`;
+const segs = t => {
+  t = String(t ?? "").trim();
+  if (!t || t === "-") return null;
+  const p = t.split(":").map(x => Number(x.replace(",", ".")));
+  if (p.length > 3 || p.some(n => !Number.isFinite(n) || n < 0)) return NaN;
+  return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p.length === 2 ? p[0] * 60 + p[1] : NaN;
+};
+const fmtT = s => {
+  if (s == null) return "–";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.round(s % 60);
+  return h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`;
+};
+const kAl = f => `${f.ap}|${f.no}`.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+function parseFilas(txt) {
+  const filas = [], errores = [];
+  txt.split("\n").forEach((raw, i) => {
+    const l = raw.trim(); if (!l) return;
+    let p = l.split(/\t|;/); if (p.length === 1) p = l.split(",");
+    p = p.map(x => x.trim());
+    let ap, no, co = "", t;
+    if (p.length >= 4) [ap, no, co, t] = p; else if (p.length === 3) [ap, no, t] = p; else { errores.push(`Línea ${i + 1}: faltan datos`); return; }
+    const s = segs(t);
+    if (!ap || Number.isNaN(s)) { errores.push(`Línea ${i + 1}: revisá el apellido o el tiempo (formato m:ss)`); return; }
+    filas.push({ ap, no, co, t: s });
+  });
+  return { filas, errores };
+}
+const filasATexto = fs => (fs || []).map(f => `${f.ap}; ${f.no}; ${f.co || ""}; ${f.t == null ? "" : fmtT(f.t)}`).join("\n");
+const testDe = (s, m, tid) => testeos.find(x => x.id === idTest(s, m, tid));
+
+function modalTest(sedeId, materiaId, t) {
+  const plan = TESTEOS_PLAN[materiaId] || [];
+  const ex = testDe(sedeId, materiaId, t.id);
+  const bg = abrirModal(`
+    <h3>${esc(t.nombre)}</h3>
+    <div class="muted">${esc(nMat(materiaId))} · ${esc(nSede(sedeId))} · ${esc(t.prueba)}</div>
+    <label>Fecha en que se tomó</label>
+    <input id="f" type="date" style="width:100%" value="${esc(ex?.fecha || hoy())}">
+    <label>Estudiantes y tiempos (una línea por estudiante)</label>
+    <div class="muted" style="font-size:.85rem">Formato: Apellido; Nombre; Cohorte; Tiempo (m:ss). Dejá el tiempo vacío o con "-" si no rindió. Podés pegar columnas copiadas de una planilla.</div>
+    <textarea id="tx" rows="12" style="font-family:monospace" placeholder="PÉREZ; Ana; TMA; 5:42">${esc(filasATexto(ex?.filas))}</textarea>
+    <div class="row"><button class="ghost small" id="prev">Traer la lista del testeo anterior</button></div>
+    <div id="err" class="msg bad" hidden style="margin-top:10px"></div>
+    <div class="row sp" style="margin-top:16px"><button class="ghost" id="cancel">Cancelar</button><button class="primary" id="ok">Guardar</button></div>`);
+  $("#prev", bg).onclick = () => {
+    const i = plan.findIndex(x => x.id === t.id);
+    for (let j = i - 1; j >= 0; j--) {
+      const o = testDe(sedeId, materiaId, plan[j].id);
+      if (o?.filas?.length) { $("#tx", bg).value = o.filas.map(f => `${f.ap}; ${f.no}; ${f.co || ""}; `).join("\n"); return; }
+    }
+    const err = $("#err", bg); err.hidden = false; err.textContent = "Todavía no hay un testeo anterior cargado.";
+  };
+  $("#cancel", bg).onclick = () => bg.remove();
+  $("#ok", bg).onclick = async () => {
+    const err = $("#err", bg), fecha = $("#f", bg).value;
+    const { filas, errores } = parseFilas($("#tx", bg).value);
+    if (!fecha) { err.hidden = false; err.textContent = "Poné la fecha del testeo."; return; }
+    if (errores.length) { err.hidden = false; err.innerHTML = esc(errores.slice(0, 5).join(" · ")); return; }
+    if (!filas.length) { err.hidden = false; err.textContent = "Cargá al menos un estudiante."; return; }
+    $("#ok", bg).disabled = true;
+    try {
+      await setDoc(doc(db, "testeos", idTest(sedeId, materiaId, t.id)), {
+        sedeId, materiaId, testId: t.id, fecha, filas, actualizado: new Date().toISOString(),
+      });
+      bg.remove(); await cargarDatos(); vista();
+    } catch (e) { err.hidden = false; err.textContent = "No se pudo guardar: " + (e.code || e.message); $("#ok", bg).disabled = false; }
+  };
+}
+
+function tablaProgresion(sedeId, materiaId) {
+  const plan = TESTEOS_PLAN[materiaId] || [];
+  const cargados = plan.filter(t => testDe(sedeId, materiaId, t.id)?.filas?.length);
+  if (!cargados.length) return `<div class="empty">Cuando se cargue el primer testeo, acá aparece la progresión de cada estudiante.</div>`;
+  const alumnos = new Map();
+  cargados.forEach(t => testDe(sedeId, materiaId, t.id).filas.forEach(f => {
+    const k = kAl(f); if (!alumnos.has(k)) alumnos.set(k, { ap: f.ap, no: f.no, co: f.co || "", t: {} });
+    const a = alumnos.get(k); a.t[t.id] = f.t; if (f.co) a.co = f.co;
+  }));
+  // Pares comparables: tests consecutivos de la misma serie
+  const pares = [];
+  const porSerie = {};
+  cargados.forEach(t => (porSerie[t.serie] ||= []).push(t));
+  Object.values(porSerie).forEach(l => { for (let i = 1; i < l.length; i++) pares.push([l[i - 1], l[i]]); });
+  const mejora = (a, x, y) => (a.t[x.id] > 0 && a.t[y.id] > 0) ? ((a.t[x.id] - a.t[y.id]) / a.t[x.id]) * 100 : null;
+  const fmtM = v => v == null ? "–" : `<span class="tag ${v >= 0 ? "ok" : "bad"}">${v >= 0 ? "-" : "+"}${Math.abs(v).toFixed(1).replace(".", ",")}%</span>`;
+  const lista = [...alumnos.values()].sort((a, b) => a.ap.localeCompare(b.ap, "es") || a.no.localeCompare(b.no, "es"));
+  const prom = arr => { const v = arr.filter(x => x != null && Number.isFinite(x)); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+  return `<div style="overflow-x:auto"><table>
+    <tr><th>Estudiante</th><th>Cohorte</th>${cargados.map(t => `<th>${esc(t.nombre.split("·")[0].trim())}<br><span class="muted" style="font-weight:400">${esc(t.prueba)}</span></th>`).join("")}
+      ${pares.map(([x, y]) => `<th>Mejora<br><span class="muted" style="font-weight:400">${esc(x.id.toUpperCase())}→${esc(y.id.toUpperCase())}</span></th>`).join("")}</tr>
+    ${lista.map(a => `<tr><td><strong>${esc(a.ap)}</strong> ${esc(a.no)}</td><td>${esc(a.co)}</td>
+      ${cargados.map(t => `<td>${a.t[t.id] === undefined ? `<span class="muted">sin dato</span>` : fmtT(a.t[t.id])}</td>`).join("")}
+      ${pares.map(([x, y]) => `<td>${fmtM(mejora(a, x, y))}</td>`).join("")}</tr>`).join("")}
+    <tr><td colspan="2"><b>Promedio del grupo</b></td>
+      ${cargados.map(t => `<td><b>${fmtT(prom(lista.map(a => a.t[t.id])))}</b><br><span class="muted">${lista.filter(a => a.t[t.id] != null).length} de ${lista.length} rindieron</span></td>`).join("")}
+      ${pares.map(([x, y]) => { const p = prom(lista.map(a => mejora(a, x, y))); return `<td><b>${p == null ? "–" : (p >= 0 ? "-" : "+") + Math.abs(p).toFixed(1).replace(".", ",") + "%"}</b></td>`; }).join("")}</tr>
+  </table></div>
+  <p class="muted" style="margin:8px 0 0">Mejora = cuánto bajó el tiempo entre dos testeos de la misma prueba. En verde, el estudiante mejoró.</p>`;
+}
+
+function panelTesteos() {
+  const cat = catActual();
+  let sedeId, materiaId, editable;
+  const prac = materias.filter(m => m.area === AREA_PRACTICA && m.activa !== false);
+  if (cat) { sedeId = cat.sedeId; materiaId = cat.materiaId; editable = !preview; }
+  else {
+    ftest.sede ||= sedes.find(s => s.activa !== false)?.id || "";
+    ftest.materia ||= (prac.find(m => TESTEOS_PLAN[m.id]) || prac[0])?.id || "";
+    sedeId = ftest.sede; materiaId = ftest.materia; editable = canEdit();
+  }
+  if (!esPractica(materiaId)) {
+    $("#panel").innerHTML = `<div class="card"><div class="empty">Los testeos unificados son solo para materias prácticas.</div></div>`; return;
+  }
+  const plan = TESTEOS_PLAN[materiaId];
+  const selector = cat ? `<span class="muted">${esc(nMat(materiaId))} · ${esc(nSede(sedeId))}</span>` : `<div class="row">
+      <select id="ts">${sedes.filter(s => s.activa !== false).map(s => `<option value="${s.id}" ${sedeId === s.id ? "selected" : ""}>${esc(s.nombre)}</option>`).join("")}</select>
+      <select id="tm">${prac.map(m => `<option value="${m.id}" ${materiaId === m.id ? "selected" : ""}>${esc(m.nombre)}</option>`).join("")}</select></div>`;
+  $("#panel").innerHTML = `
+    <div class="row sp" style="margin-bottom:10px"><div><h2 style="margin:0">Testeos unificados</h2>${selector}</div></div>
+    ${plan ? `<div class="card"><strong>Calendario de testeos</strong>
+      <table><tr><th>Testeo</th><th>Prueba</th><th>Cuándo</th><th>Estado</th><th></th></tr>
+      ${plan.map(t => { const d = testDe(sedeId, materiaId, t.id); const n = d?.filas?.length || 0;
+        return `<tr><td><b>${esc(t.nombre)}</b></td><td>${esc(t.prueba)}</td><td>${esc(t.cuando)}</td>
+        <td>${d ? `<span class="tag ok">Cargado</span><br><span class="muted">${esc(fmtCorta(d.fecha))} · ${n} estudiantes</span>` : `<span class="tag off">Pendiente</span>`}</td>
+        <td>${editable ? `<button class="ghost small" data-t="${t.id}">${d ? "Editar" : "Cargar"}</button>` : ""}</td></tr>`; }).join("")}
+      </table></div>
+      <div class="card"><strong>Progresión de los estudiantes</strong><div style="margin-top:8px">${tablaProgresion(sedeId, materiaId)}</div></div>`
+    : `<div class="card"><div class="empty">Para esta materia todavía no hay testeos unificados definidos.</div></div>`}`;
+  if ($("#ts")) $("#ts").onchange = e => { ftest.sede = e.target.value; panelTesteos(); };
+  if ($("#tm")) $("#tm").onchange = e => { ftest.materia = e.target.value; panelTesteos(); };
+  $("#panel").querySelectorAll("[data-t]").forEach(b => b.onclick = () => modalTest(sedeId, materiaId, plan.find(t => t.id === b.dataset.t)));
+}
+
 function panelSedes() {
   $("#panel").innerHTML = `
     <div class="card"><div class="row sp"><strong>Sedes</strong><button class="primary" id="nueva">+ Nueva sede</button></div>
